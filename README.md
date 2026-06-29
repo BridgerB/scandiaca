@@ -1,0 +1,2 @@
+# scandiaca
+Rust Matrix Server
