@@ -1,0 +1,29 @@
+# Complement test image for scandiaca.
+#
+# Multi-stage: build the release binary with the Rust toolchain, then run it on a
+# slim Debian base that has openssl (for the CA-signed federation cert) and curl
+# (for the healthcheck). Complement mounts its CA at /complement/ca and expects
+# the client API on 8008 (HTTP) and federation on 8448 (HTTPS).
+
+# Some transitive deps (icu via reqwest) need rustc ≥ 1.86, so build with a
+# newer toolchain than the crate's own rust-version floor (1.85).
+FROM rust:1.88-slim AS builder
+RUN apt-get update && apt-get install -y pkg-config && rm -rf /var/lib/apt/lists/*
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY src/ ./src/
+COPY tests/ ./tests/
+RUN cargo build --release --bin scandiaca
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y curl openssl ca-certificates && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY --from=builder /build/target/release/scandiaca /usr/local/bin/scandiaca
+COPY complement-entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+EXPOSE 8008 8448
+HEALTHCHECK --interval=1s --timeout=5s --start-period=10s \
+    CMD curl -sf http://localhost:8008/_matrix/client/versions || exit 1
+
+ENTRYPOINT ["/entrypoint.sh"]
