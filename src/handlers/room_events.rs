@@ -587,6 +587,32 @@ pub async fn get_messages(
     // timeline events (TestRoomImageRoundtrip filters by type).
     let tl_filter: Option<crate::types::filters::RoomEventFilter> =
         params.get("filter").and_then(|f| serde_json::from_str(f).ok());
+    // MSC3874: filter by relation type (org.matrix.msc3874.rel_types /
+    // .not_rel_types) — not part of the standard RoomEventFilter.
+    let filter_json: Option<Value> = params.get("filter").and_then(|f| serde_json::from_str(f).ok());
+    let rel_types: Option<Vec<String>> = filter_json.as_ref().and_then(|f| {
+        f.get("org.matrix.msc3874.rel_types").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+    });
+    let not_rel_types: Option<Vec<String>> = filter_json.as_ref().and_then(|f| {
+        f.get("org.matrix.msc3874.not_rel_types").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+    });
+    let passes = |ev: &Value| -> bool {
+        if !crate::event_filter::matches_room_event_filter(ev, tl_filter.as_ref()) {
+            return false;
+        }
+        let rt = ev.get("content").and_then(|c| c.get("m.relates_to")).and_then(|r| r.get("rel_type")).and_then(Value::as_str);
+        if let Some(want) = &rel_types {
+            if !rt.map(|rt| want.iter().any(|w| w == rt)).unwrap_or(false) {
+                return false;
+            }
+        }
+        if let Some(not) = &not_rel_types {
+            if rt.map(|rt| not.iter().any(|w| w == rt)).unwrap_or(false) {
+                return false;
+            }
+        }
+        true
+    };
 
     // Decide whether to serve a DAG (topological) backward view: continuing a
     // topo token, or paginating back into a room with gappy/out-of-order federated
@@ -637,7 +663,7 @@ pub async fn get_messages(
         let mut ordered: Vec<&crate::storage::interface::StreamEventRecord> = all
             .events
             .iter()
-            .filter(|e| crate::event_filter::matches_room_event_filter(&e.event, tl_filter.as_ref()))
+            .filter(|e| passes(&e.event))
             .collect();
         ordered.sort_by(|a, b| (event_depth(&a.event), a.stream_pos).cmp(&(event_depth(&b.event), b.stream_pos)));
 
@@ -657,7 +683,7 @@ pub async fn get_messages(
     } else if let Some(pos) = read.leave_pos {
         // Departed reader (SPEC-216): timeline clamped to the leave point.
         let mut clamped = events_up_to(&*st.storage, &room_id, pos).await;
-        clamped.retain(|e| crate::event_filter::matches_room_event_filter(&e.event, tl_filter.as_ref()));
+        clamped.retain(|e| passes(&e.event));
         if forward {
             let from_pos = from.unwrap_or(0);
             clamped.retain(|e| e.stream_pos > from_pos);
@@ -677,7 +703,7 @@ pub async fn get_messages(
         let mut ordered: Vec<&crate::storage::interface::StreamEventRecord> = all
             .events
             .iter()
-            .filter(|e| crate::event_filter::matches_room_event_filter(&e.event, tl_filter.as_ref()))
+            .filter(|e| passes(&e.event))
             .collect();
         ordered.sort_by(|a, b| (event_depth(&a.event), a.stream_pos).cmp(&(event_depth(&b.event), b.stream_pos)));
         if forward {

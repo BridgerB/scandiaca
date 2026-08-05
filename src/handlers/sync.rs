@@ -538,7 +538,7 @@ async fn build_join_room(
     rules: &Value,
     display_name: Option<&str>,
 ) -> (Value, bool) {
-    let (timeline_events, limited): (Vec<Value>, bool) = if is_initial {
+    let (mut timeline_events, limited): (Vec<Value>, bool) = if is_initial {
         let page = st
             .storage
             .get_events_by_room(room_id, filter.timeline_limit, Some(0), Direction::Forward)
@@ -565,6 +565,10 @@ async fn build_join_room(
             s.limited,
         )
     };
+
+    // MSC4115: stamp each timeline event's unsigned.membership with the syncing
+    // user's membership at that event (TestMembershipOnEvents).
+    stamp_membership(st, room_id, auth.user_id.as_str(), &mut timeline_events).await;
 
     // Full current state on initial sync; deltas are deferred.
     let state_events: Vec<Value> = if is_initial {
@@ -639,6 +643,39 @@ async fn build_join_room(
         },
     });
     (room, has_content)
+}
+
+/// MSC4115: stamp `unsigned.membership` on each timeline event with the syncing
+/// user's membership at that event's point in the room DAG (strix
+/// `computeMembershipMap` / `stampMembership`).
+async fn stamp_membership(st: &AppState, room_id: &RoomId, user_id: &str, events: &mut [Value]) {
+    if events.is_empty() {
+        return;
+    }
+    let all = st.storage.get_events_by_room(room_id, 100000, Some(0), Direction::Forward).await;
+    let mut map: HashMap<String, String> = HashMap::new();
+    let mut current = "leave".to_string();
+    for er in &all.events {
+        if er.event.get("type").and_then(Value::as_str) == Some("m.room.member")
+            && er.event.get("state_key").and_then(Value::as_str) == Some(user_id)
+        {
+            if let Some(m) = er.event.get("content").and_then(|c| c.get("membership")).and_then(Value::as_str) {
+                current = m.to_string();
+            }
+        }
+        map.insert(er.event_id.as_str().to_string(), current.clone());
+    }
+    for ev in events.iter_mut() {
+        let Some(eid) = ev.get("event_id").and_then(Value::as_str).map(String::from) else { continue };
+        if let Some(m) = map.get(&eid) {
+            if let Some(obj) = ev.as_object_mut() {
+                let unsigned = obj.entry("unsigned").or_insert_with(|| json!({}));
+                if let Some(u) = unsigned.as_object_mut() {
+                    u.insert("membership".to_string(), json!(m));
+                }
+            }
+        }
+    }
 }
 
 /// Room summary block (`m.heroes`, joined/invited counts) for a joined room.

@@ -11,6 +11,7 @@ use axum::response::{IntoResponse, Json, Response};
 use serde_json::{json, Value};
 
 use crate::crypto::{generate_device_id, generate_token};
+use crate::extract::OptionalJson;
 use crate::crypto_utils::{hash_password, verify_password};
 use crate::errors::{
     bad_json, forbidden, invalid_param, invalid_username, user_in_use, weak_password, MatrixResult,
@@ -27,7 +28,9 @@ pub async fn register(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
-    Json(body): Json<Value>,
+    // OptionalJson (not axum's Json) so a malformed body yields M_NOT_JSON/400
+    // rather than a non-Matrix rejection (TestRequestEncodingFails).
+    OptionalJson(body): OptionalJson,
 ) -> MatrixResult<Response> {
     check_rate_limit(&addr.ip().to_string(), "register")?;
     if params.get("kind").map(String::as_str) == Some("guest") {
