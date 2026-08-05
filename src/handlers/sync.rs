@@ -551,18 +551,28 @@ async fn build_join_room(
     rules: &Value,
     display_name: Option<&str>,
 ) -> (Value, bool) {
+    // Back-pagination boundary for a limited initial window (prev_batch).
+    let mut init_boundary: Option<i64> = None;
     let (mut timeline_events, limited): (Vec<Value>, bool) = if is_initial {
+        // The NEWEST `timeline_limit` events (walk back from the head), returned
+        // in chronological order. Returning the oldest N instead hides recent
+        // history in rooms with more than the limit (broke SyncTimelineHas).
         let page = st
             .storage
-            .get_events_by_room(room_id, filter.timeline_limit, Some(0), Direction::Forward)
+            .get_events_by_room(room_id, filter.timeline_limit, None, Direction::Backward)
             .await;
+        let limited = page.events.len() >= filter.timeline_limit;
+        if limited {
+            init_boundary = page.end.map(|e| e - 1);
+        }
         (
             page.events
                 .iter()
+                .rev()
                 .map(|er| client_event_no_room(&er.event, er.event_id.as_str()))
                 .filter(|ce| matches_room_event_filter(ce, filter.timeline_filter.as_ref()))
                 .collect(),
-            false,
+            limited,
         )
     } else {
         let s = st
@@ -625,7 +635,7 @@ async fn build_join_room(
     // prev_batch: for an unlimited window the current stream position (also a
     // valid `at` token for GET /members?at=… — TestGetRoomMembersAtPoint); for an
     // incremental window the since token (back-pagination boundary).
-    let prev_batch = if is_initial { next_batch } else { since_pos };
+    let prev_batch = if is_initial { init_boundary.unwrap_or(next_batch) } else { since_pos };
 
     let ephemeral = build_ephemeral(st, room_id, typing_changed).await;
     // Whether this room carries a change worth reporting on an incremental sync
