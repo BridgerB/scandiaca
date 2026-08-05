@@ -122,6 +122,9 @@ pub async fn sync(
     // on initial sync, and to gate incremental presence/device-list changes).
     let mut newly_shared: HashSet<String> = HashSet::new();
     let mut seen_users: HashSet<String> = HashSet::new();
+    // Users whose final membership transition this window (in a room we share, or
+    // a room we ourselves left) is leave/ban — candidates for device_lists.left.
+    let mut newly_left: HashSet<String> = HashSet::new();
 
     for m in &memberships {
         let room_id = &m.room_id;
@@ -146,29 +149,52 @@ pub async fn sync(
                 if is_initial || has_content {
                     join.insert(room_id.to_string(), room_json);
                 }
-                // Collect joined members (seen) + newly-joined members this window.
+                // Collect joined members (seen). Track each user's FINAL membership
+                // transition in this window: join/invite/knock → device_lists.changed
+                // candidate; leave/ban → device_lists.left candidate.
                 let members = st.storage.get_member_events(room_id).await;
-                let new_ids: HashSet<String> = if is_initial {
-                    HashSet::new()
-                } else {
-                    st.storage
-                        .get_events_by_room_since(room_id, since_pos, 100000)
-                        .await
-                        .events
-                        .iter()
-                        .filter(|e| {
-                            e.event.get("type").and_then(Value::as_str) == Some("m.room.member")
-                                && e.event.get("content").and_then(|c| c.get("membership")).and_then(Value::as_str) == Some("join")
-                        })
-                        .filter_map(|e| e.event.get("state_key").and_then(Value::as_str).map(str::to_string))
-                        .collect()
-                };
                 for me in &members {
                     if me.event.get("content").and_then(|c| c.get("membership")).and_then(Value::as_str) == Some("join") {
                         if let Some(sk) = me.event.get("state_key").and_then(Value::as_str) {
                             seen_users.insert(sk.to_string());
-                            if new_ids.contains(sk) {
-                                newly_shared.insert(sk.to_string());
+                        }
+                    }
+                }
+                if !is_initial {
+                    let window = st.storage.get_events_by_room_since(room_id, since_pos, 100000).await;
+                    let mut final_membership: HashMap<String, String> = HashMap::new();
+                    for e in &window.events {
+                        if e.event.get("type").and_then(Value::as_str) != Some("m.room.member") {
+                            continue;
+                        }
+                        let Some(sk) = e.event.get("state_key").and_then(Value::as_str) else { continue };
+                        let Some(m) = e.event.get("content").and_then(|c| c.get("membership")).and_then(Value::as_str) else { continue };
+                        final_membership.insert(sk.to_string(), m.to_string());
+                    }
+                    let self_newly_joined =
+                        final_membership.get(auth.user_id.as_str()).map(String::as_str) == Some("join");
+                    for (u, m) in &final_membership {
+                        match m.as_str() {
+                            "join" | "invite" | "knock" => {
+                                newly_shared.insert(u.clone());
+                            }
+                            "leave" | "ban" if u != auth.user_id.as_str() => {
+                                newly_left.insert(u.clone());
+                            }
+                            _ => {}
+                        }
+                    }
+                    // When the syncer itself newly joined this room, every current
+                    // member is a user they NEWLY share a room with — surface all of
+                    // them in device_lists.changed (TestDeviceListUpdates join case).
+                    if self_newly_joined {
+                        for me in &members {
+                            if me.event.get("content").and_then(|c| c.get("membership")).and_then(Value::as_str) == Some("join") {
+                                if let Some(sk) = me.event.get("state_key").and_then(Value::as_str) {
+                                    if sk != auth.user_id.as_str() {
+                                        newly_shared.insert(sk.to_string());
+                                    }
+                                }
                             }
                         }
                     }
@@ -232,6 +258,19 @@ pub async fn sync(
                 if want {
                     if let Some(lr) = build_leave_room(&st, room_id, auth.user_id.as_str(), is_initial, since_pos, &filter).await {
                         leave.insert(room_id.to_string(), lr);
+                        // We left this room this window: every other member becomes a
+                        // device_lists.left candidate (we can no longer observe them
+                        // through this room). Survivors sharing another joined room
+                        // are filtered out after the loop.
+                        if !is_initial {
+                            for me in st.storage.get_member_events(room_id).await {
+                                if let Some(sk) = me.event.get("state_key").and_then(Value::as_str) {
+                                    if sk != auth.user_id.as_str() {
+                                        newly_left.insert(sk.to_string());
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -314,6 +353,13 @@ pub async fn sync(
         out.into_iter().collect()
     };
 
+    // device_lists.left: candidates who left a shared room (or a room we left)
+    // this window and no longer share ANY currently-joined room with us.
+    let device_left: Vec<String> = newly_left
+        .into_iter()
+        .filter(|u| u != auth.user_id.as_str() && !seen_users.contains(u))
+        .collect();
+
     Ok(Json(json!({
         "next_batch": next_batch.to_string(),
         "rooms": {
@@ -324,7 +370,7 @@ pub async fn sync(
         },
         "account_data": { "events": global_ad },
         "presence": { "events": presence_events },
-        "device_lists": { "changed": device_changed, "left": [] },
+        "device_lists": { "changed": device_changed, "left": device_left },
         "device_one_time_keys_count": otk_counts,
         "to_device": { "events": to_device },
     })))
