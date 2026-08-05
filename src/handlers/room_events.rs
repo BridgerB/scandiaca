@@ -24,6 +24,54 @@ use crate::types::identifiers::{EventId, RoomId};
 
 const MAX_EVENT_SIZE: usize = 65536;
 
+/// Per-event history-visibility check (strix `requireHistoryVisibleOr404`): under
+/// `joined`/`invited` visibility, an event sent before the requester's join/invite
+/// is hidden. Returns false when the event is NOT visible to the user.
+async fn history_visible_to(st: &AppState, room_id: &RoomId, event_id: &str, user_id: &str) -> bool {
+    let Some(room) = st.storage.get_room(room_id).await else { return false };
+    let vis = room
+        .state_events
+        .get("m.room.history_visibility\u{1f}")
+        .and_then(|e| e.get("content"))
+        .and_then(|c| c.get("history_visibility"))
+        .and_then(Value::as_str)
+        .unwrap_or("shared")
+        .to_string();
+    if vis != "joined" && vis != "invited" {
+        return true;
+    }
+    let all = st.storage.get_events_by_room_since(room_id, 0, 1_000_000).await;
+    let mut membership: Option<String> = None;
+    let mut active = "shared".to_string();
+    for e in &all.events {
+        let ev = &e.event;
+        if ev.get("type").and_then(Value::as_str) == Some("m.room.history_visibility")
+            && ev.get("state_key").and_then(Value::as_str) == Some("")
+        {
+            if let Some(v) = ev.get("content").and_then(|c| c.get("history_visibility")).and_then(Value::as_str) {
+                active = v.to_string();
+            }
+        }
+        if e.event_id.as_str() == event_id {
+            if active == "joined" && membership.as_deref() != Some("join") {
+                return false;
+            }
+            if active == "invited" && membership.as_deref() != Some("join") && membership.as_deref() != Some("invite") {
+                return false;
+            }
+            return true;
+        }
+        if ev.get("type").and_then(Value::as_str) == Some("m.room.member")
+            && ev.get("state_key").and_then(Value::as_str) == Some(user_id)
+        {
+            if let Some(m) = ev.get("content").and_then(|c| c.get("membership")).and_then(Value::as_str) {
+                membership = Some(m.to_string());
+            }
+        }
+    }
+    true // event not in timeline → let the caller's lookup decide
+}
+
 /// An event's DAG depth (for topological ordering).
 fn event_depth(event: &Value) -> i64 {
     event.get("depth").and_then(Value::as_i64).unwrap_or(0)
@@ -311,7 +359,16 @@ pub async fn get_event(
     Path((room_id, event_id)): Path<(String, String)>,
 ) -> MatrixResult<Json<Value>> {
     let rid = RoomId::from(room_id.as_str());
-    require_can_read_room(&*st.storage, &rid, auth.user_id.as_str()).await?;
+    // A user who can't read the room gets 404 here (not 403) — a single-event
+    // fetch must not reveal existence (TestFetchEventNonWorldReadable).
+    require_can_read_room(&*st.storage, &rid, auth.user_id.as_str())
+        .await
+        .map_err(|_| not_found("Event not found"))?;
+    // Per-event history-visibility: under joined/invited, events from before the
+    // requester's join/invite are hidden as 404 (TestFetchHistoricalJoinedEventDenied).
+    if !history_visible_to(&st, &rid, &event_id, auth.user_id.as_str()).await {
+        return Err(not_found("Event not found"));
+    }
     let entry = st.storage.get_event(&EventId::from(event_id.as_str())).await;
     let entry = match entry {
         Some(e) if !e.rejected && e.event.get("room_id").and_then(Value::as_str) == Some(&room_id) => e,

@@ -22,6 +22,7 @@ use crate::ignored::{get_ignored_invite_senders, get_ignored_users};
 use crate::push_rules::{evaluate_push_rules, get_or_init_rules, EvaluationContext};
 use crate::server::{AppState, AuthCtx};
 use crate::storage::Direction;
+use crate::types::ephemeral::PresenceState;
 use crate::types::filters::RoomEventFilter;
 use crate::types::identifiers::RoomId;
 
@@ -98,6 +99,18 @@ pub async fn sync(
     let timeout: u64 = params.get("timeout").and_then(|s| s.parse().ok()).unwrap_or(0);
     let is_initial = since.is_none();
     let since_pos = since.unwrap_or(0);
+
+    // `?set_presence=` sets the caller's presence (default online). Only write
+    // when it actually changes, to avoid waking every long-poll each sync
+    // (TestPresence "presence can be set from sync").
+    let desired = match params.get("set_presence").map(String::as_str) {
+        Some("offline") => PresenceState::Offline,
+        Some("unavailable") => PresenceState::Unavailable,
+        _ => PresenceState::Online,
+    };
+    if st.storage.get_presence(&auth.user_id).await.map(|p| p.presence) != Some(desired) {
+        st.storage.set_presence(&auth.user_id, desired, None).await;
+    }
 
     if !is_initial && timeout > 0 && st.storage.get_stream_position().await <= since_pos {
         st.storage.wait_for_events(since_pos, timeout).await;
