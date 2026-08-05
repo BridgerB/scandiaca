@@ -78,6 +78,28 @@ pub async fn upgrade(
     let mut create_content = Map::new();
     create_content.insert("room_version".to_string(), json!(new_version));
     create_content.insert("predecessor".to_string(), Value::Object(predecessor));
+    // MSC4289: carry the old room's additional_creators into the replacement so
+    // privileged creators survive the upgrade.
+    let old_create = old_room.state_events.get("m.room.create\u{1f}");
+    if v12_plus {
+        if let Some(ac) = old_create.and_then(|c| c.get("content")).and_then(|c| c.get("additional_creators")) {
+            create_content.insert("additional_creators".to_string(), ac.clone());
+        }
+    }
+    // The set of creators of the NEW room that must NOT appear in a v12
+    // power_levels `users` map: the upgrader (the new create event's sender) plus
+    // any carried-over additional_creators.
+    let mut creators: std::collections::HashSet<String> = std::collections::HashSet::new();
+    if v12_plus {
+        creators.insert(auth.user_id.as_str().to_string());
+        if let Some(arr) = create_content.get("additional_creators").and_then(Value::as_array) {
+            for u in arr {
+                if let Some(u) = u.as_str() {
+                    creators.insert(u.to_string());
+                }
+            }
+        }
+    }
 
     // Replacement room id (v12 derives from the create event).
     let create_ts = now_ms();
@@ -134,7 +156,14 @@ pub async fn upgrade(
     for stype in COPIED_STATE {
         let sk = format!("{stype}\u{1f}");
         if let Some(old_event) = old_room.state_events.get(&sk) {
-            let content = old_event.get("content").cloned().unwrap_or_else(|| json!({}));
+            let mut content = old_event.get("content").cloned().unwrap_or_else(|| json!({}));
+            // v12: creators hold implicit infinite power and must not be listed in
+            // power_levels.users, so strip them from the copied PL event.
+            if *stype == "m.room.power_levels" && !creators.is_empty() {
+                if let Some(users) = content.get_mut("users").and_then(Value::as_object_mut) {
+                    users.retain(|k, _| !creators.contains(k.as_str()));
+                }
+            }
             send_state_event(storage, sn, &mut ctx, auth.user_id.as_str(), stype, "", content, key, None).await?;
         }
     }

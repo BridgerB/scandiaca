@@ -88,8 +88,7 @@ pub async fn put_send_event(
     }
 
     let eid = EventId::from(event_id.as_str());
-    // Index relations and propagate/push while borrowing the event.
-    index_relation(&*st.storage, &event, &eid).await;
+    // Propagate/push while borrowing the event (no storage dependency).
     if let Some(fed) = &st.federation_client {
         crate::federation::outbound::fanout_event(&*st.storage, fed, &st.server_name, &room_id, &event).await;
     }
@@ -101,6 +100,13 @@ pub async fn put_send_event(
     st.storage
         .commit_timeline_event(event, &eid, &room_id, room.depth + 1, vec![eid.clone()], &txn_key)
         .await;
+
+    // Index relations AFTER the event is committed: store_relation reads the
+    // event's sender/type/stream position from storage, so indexing before the
+    // commit would silently drop the relation (empty /relations + /threads).
+    if let Some(stored) = st.storage.get_event(&eid).await {
+        index_relation(&*st.storage, &stored.event, &eid).await;
+    }
 
     Ok(Json(json!({ "event_id": event_id })))
 }
@@ -120,6 +126,14 @@ pub async fn put_state_event(
 
     if !content.is_object() {
         return Err(bad_json("Event content must be a JSON object"));
+    }
+    // Spec caps state_key and type at 255 bytes; reject oversized ones so we never
+    // build/federate an invalid event (TestOutboundFederationEventSizeGetMissingEvents).
+    if state_key.len() > 255 {
+        return Err(MatrixError::new("M_BAD_JSON", "State key too long", 400));
+    }
+    if event_type.len() > 255 {
+        return Err(MatrixError::new("M_BAD_JSON", "Event type too long", 400));
     }
     let rid = RoomId::from(room_id.as_str());
     let room = require_joined_room(&*st.storage, &rid, auth.user_id.as_str()).await?;
@@ -194,6 +208,57 @@ pub async fn get_state_event(
     }
 }
 
+/// `GET /_matrix/client/v1/rooms/{roomId}/timestamp_to_event?ts=<ms>&dir=<f|b>`.
+/// Returns the event closest to `ts` in the given direction (MSC3030 jump-to-date,
+/// local resolution). `dir=f` picks the earliest event at/after `ts`; `dir=b` the
+/// latest at/before.
+pub async fn get_timestamp_to_event(
+    State(st): State<AppState>,
+    auth: AuthCtx,
+    Path(room_id): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+) -> MatrixResult<Json<Value>> {
+    let rid = RoomId::from(room_id.as_str());
+    require_joined_room(&*st.storage, &rid, auth.user_id.as_str()).await?;
+
+    let ts: i64 = params
+        .get("ts")
+        .and_then(|s| s.parse().ok())
+        .ok_or_else(|| bad_json("Missing or invalid 'ts'"))?;
+    let forward = match params.get("dir").map(String::as_str) {
+        Some("f") => true,
+        Some("b") => false,
+        _ => return Err(bad_json("'dir' must be 'f' or 'b'")),
+    };
+
+    let all = st.storage.get_events_by_room_since(&rid, 0, 1_000_000).await;
+    let mut best: Option<(String, i64)> = None;
+    for e in &all.events {
+        let ets = e.event.get("origin_server_ts").and_then(Value::as_i64).unwrap_or(0);
+        let candidate = if forward { ets >= ts } else { ets <= ts };
+        if !candidate {
+            continue;
+        }
+        let better = match &best {
+            None => true,
+            Some((_, bts)) => {
+                if forward {
+                    ets < *bts
+                } else {
+                    ets > *bts
+                }
+            }
+        };
+        if better {
+            best = Some((e.event_id.as_str().to_string(), ets));
+        }
+    }
+    match best {
+        Some((event_id, ets)) => Ok(Json(json!({ "event_id": event_id, "origin_server_ts": ets }))),
+        None => Err(not_found("Unable to find event from timestamp in direction")),
+    }
+}
+
 /// `GET /_matrix/client/v3/rooms/{roomId}/event/{eventId}`.
 pub async fn get_event(
     State(st): State<AppState>,
@@ -232,9 +297,14 @@ pub async fn get_members(
 
     let membership = params.get("membership").map(String::as_str);
     let not_membership = params.get("not_membership").map(String::as_str);
+    // `?at=<sync token>`: return membership as of that stream position. A departed
+    // reader is always clamped to their leave point (SPEC-216), which takes
+    // precedence over a client-supplied `at`.
+    let at_pos: Option<i64> = params.get("at").and_then(|s| s.parse().ok());
 
-    // Member events: as-of-leave for departed readers, else current.
-    let members: Vec<(Value, String)> = if let Some(pos) = read.leave_pos {
+    // Member events: as-of-leave for departed readers, as-of-`at` when requested,
+    // else current.
+    let members: Vec<(Value, String)> = if let Some(pos) = read.leave_pos.or(at_pos) {
         state_as_of(&*st.storage, &rid, pos)
             .await
             .into_iter()
@@ -447,6 +517,12 @@ pub async fn get_messages(
     Query(params): Query<HashMap<String, String>>,
 ) -> MatrixResult<Json<Value>> {
     let room_id: RoomId = room_id.into();
+    // /messages on a room the server doesn't know returns 403 (a client must not
+    // be able to distinguish a non-existent room from one it can't see) —
+    // TestFetchMessagesFromNonExistentRoom.
+    if st.storage.get_room(&room_id).await.is_none() {
+        return Err(forbidden("You are not a member of the room and weren't previously"));
+    }
     let read = require_can_read_room(&*st.storage, &room_id, auth.user_id.as_str()).await?;
 
     let forward = params.get("dir").map(String::as_str) == Some("f");
@@ -486,9 +562,32 @@ pub async fn get_messages(
     };
 
     let start = from.map(|f| f.to_string()).unwrap_or_else(|| "0".to_string());
-    Ok(Json(json!({
-        "chunk": chunk,
-        "start": start,
-        "end": end.map(|e| e.to_string()),
-    })))
+
+    // Lazy-loading (?filter with lazy_load_members): include a `state` block with
+    // the m.room.member event for each distinct sender in the chunk
+    // (TestRoomMessagesLazyLoading).
+    let lazy = params
+        .get("filter")
+        .and_then(|f| serde_json::from_str::<Value>(f).ok())
+        .and_then(|f| f.get("lazy_load_members").and_then(Value::as_bool))
+        .unwrap_or(false);
+    let mut body = serde_json::Map::new();
+    body.insert("chunk".to_string(), Value::Array(chunk.clone()));
+    body.insert("start".to_string(), json!(start));
+    body.insert("end".to_string(), json!(end.map(|e| e.to_string())));
+    if lazy {
+        let mut seen = std::collections::HashSet::new();
+        let mut state = Vec::new();
+        for ev in &chunk {
+            if let Some(sender) = ev.get("sender").and_then(Value::as_str) {
+                if seen.insert(sender.to_string()) {
+                    if let Some(rec) = st.storage.get_state_event(&room_id, "m.room.member", sender).await {
+                        state.push(client_event(&rec.event, rec.event_id.as_str()));
+                    }
+                }
+            }
+        }
+        body.insert("state".to_string(), Value::Array(state));
+    }
+    Ok(Json(Value::Object(body)))
 }

@@ -91,6 +91,12 @@ pub async fn send_state_event(
         origin_server_ts,
     });
 
+    // Size guard (spec: PDUs must be ≤ 64 KiB). Mirrors the message-send path in
+    // handlers/room_events.rs so oversized state events are rejected with 413.
+    if serde_json::to_vec(&event).map(|v| v.len()).unwrap_or(0) > 65536 {
+        return Err(MatrixError::new("M_TOO_LARGE", "Event is too large", 413));
+    }
+
     check_event_auth(&event, &ctx.room_state)?;
 
     let eid = EventId::from(event_id.as_str());
@@ -210,6 +216,56 @@ pub async fn user_satisfies_restricted_allow(
         }
     }
     false
+}
+
+/// The room's join rule (`content.join_rule` of `m.room.join_rules`), or
+/// `"invite"` when absent (the spec default).
+pub fn get_join_rule(room: &RoomState) -> String {
+    room.state_events
+        .get(&make_state_key("m.room.join_rules", ""))
+        .and_then(|jr| jr.get("content"))
+        .and_then(|c| c.get("join_rule"))
+        .and_then(Value::as_str)
+        .unwrap_or("invite")
+        .to_string()
+}
+
+/// For a restricted/knock_restricted room, find a LOCAL joined user with invite
+/// power to record in a join event's `join_authorised_via_users_server`. Picks
+/// the highest-power qualifying user (ties broken by lowest user id), matching
+/// strix `findAuthorisingLocalUser`. Returns `None` if none qualifies.
+pub fn find_authorising_local_user(room: &RoomState, server_name: &str) -> Option<String> {
+    let invite_pl = room
+        .state_events
+        .get(&make_state_key("m.room.power_levels", ""))
+        .and_then(|pl| pl.get("content"))
+        .and_then(|c| c.get("invite"))
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+
+    let prefix = "m.room.member\u{1f}";
+    let mut best: Option<String> = None;
+    let mut best_pl = f64::NEG_INFINITY;
+    for (k, ev) in room.state_events.iter() {
+        let Some(member_id) = k.strip_prefix(prefix) else { continue };
+        if crate::events::membership_of(ev) != Some("join") {
+            continue;
+        }
+        if crate::ids::domain_of(member_id) != server_name {
+            continue;
+        }
+        let member_pl = crate::events::get_user_power_level(member_id, room);
+        if member_pl < invite_pl {
+            continue;
+        }
+        if member_pl > best_pl
+            || (member_pl == best_pl && best.as_deref().map(|b| member_id < b).unwrap_or(true))
+        {
+            best = Some(member_id.to_string());
+            best_pl = member_pl;
+        }
+    }
+    best
 }
 
 /// Fetch a room and require the user to be joined (strix `requireJoinedRoom`).

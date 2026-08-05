@@ -23,9 +23,21 @@ pub async fn put_typing(
     }
     let typing = body.get("typing").and_then(Value::as_bool).unwrap_or(false);
     let timeout = body.get("timeout").and_then(Value::as_i64);
+    let rid = RoomId::from(room_id.as_str());
     st.storage
-        .set_typing(&RoomId::from(room_id.as_str()), &UserId::from(user_id.as_str()), typing, timeout)
+        .set_typing(&rid, &UserId::from(user_id.as_str()), typing, timeout)
         .await;
+    // Fan the typing notification out to remote servers in the room (TestRemoteTyping).
+    if let Some(fed) = &st.federation_client {
+        crate::federation::outbound::fanout_edu_to_room(
+            &*st.storage,
+            fed,
+            &st.server_name,
+            &rid,
+            json!({ "edu_type": "m.typing", "content": { "room_id": room_id, "user_id": user_id, "typing": typing } }),
+        )
+        .await;
+    }
     Ok(Json(json!({})))
 }
 

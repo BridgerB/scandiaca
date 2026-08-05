@@ -155,3 +155,40 @@ pub async fn fanout_event(
         let _ = send_transaction(client, origin, dest, vec![event.clone()], vec![]).await;
     }
 }
+
+/// Deliver an EDU to every remote server resident in a room (typing/receipts).
+pub async fn fanout_edu_to_room(
+    storage: &dyn Storage,
+    client: &FederationClient,
+    origin: &str,
+    room_id: &crate::types::identifiers::RoomId,
+    edu: Value,
+) {
+    for dest in storage.get_servers_in_room(room_id).await {
+        let dest = dest.as_str();
+        if dest.is_empty() || dest == origin {
+            continue;
+        }
+        deliver_edu_to_destination(storage, client, origin, dest, edu.clone()).await;
+    }
+}
+
+/// Deliver an EDU to every remote server that shares one of `room_ids` (presence).
+pub async fn fanout_edu_to_room_servers(
+    storage: &dyn Storage,
+    client: &FederationClient,
+    origin: &str,
+    room_ids: &[crate::types::identifiers::RoomId],
+    edu: Value,
+) {
+    let mut seen = std::collections::HashSet::new();
+    for rid in room_ids {
+        for dest in storage.get_servers_in_room(rid).await {
+            let d = dest.as_str().to_string();
+            if d.is_empty() || d == origin || !seen.insert(d.clone()) {
+                continue;
+            }
+            deliver_edu_to_destination(storage, client, origin, &d, edu.clone()).await;
+        }
+    }
+}

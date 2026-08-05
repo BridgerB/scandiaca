@@ -104,6 +104,29 @@ pub async fn create_room(
         if let Some(ac) = create_content.get("additional_creators") {
             validate_additional_creators(ac)?;
         }
+        // MSC4289: in v12+ the `trusted_private_chat` preset makes invited users
+        // room creators (merged into create.content.additional_creators) rather
+        // than PL100 admins.
+        if preset == "trusted_private_chat" {
+            if let Some(invites) = body.get("invite").and_then(Value::as_array) {
+                let mut merged: Vec<Value> = create_content
+                    .get("additional_creators")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                for inv in invites {
+                    let Some(invitee) = inv.as_str() else { continue };
+                    let dup = invitee == user_id
+                        || merged.iter().any(|m| m.as_str() == Some(invitee));
+                    if !dup {
+                        merged.push(json!(invitee));
+                    }
+                }
+                if !merged.is_empty() {
+                    create_content.insert("additional_creators".to_string(), json!(merged));
+                }
+            }
+        }
     }
 
     // room id

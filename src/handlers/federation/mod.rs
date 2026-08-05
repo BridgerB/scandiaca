@@ -39,7 +39,18 @@ pub async fn query_profile(
             "The request body did not contain required argument 'user_id'.",
         ));
     };
-    if !user_id.starts_with('@') || !user_id.contains(':') {
+    // A valid user id is `@localpart:server_name`, where server_name is a host
+    // optionally followed by a numeric port. `@user1:localhost:http` is malformed
+    // (non-numeric port) and must be rejected with 400 (TestInboundFederationProfile).
+    let valid = user_id.starts_with('@')
+        && user_id[1..].split_once(':').is_some_and(|(local, domain)| {
+            !local.is_empty()
+                && !domain.is_empty()
+                && domain.rsplit_once(':').is_none_or(|(host, port)| {
+                    !host.is_empty() && !port.is_empty() && port.chars().all(|c| c.is_ascii_digit())
+                })
+        });
+    if !valid {
         return Err(invalid_param(format!("Invalid user ID: {user_id}")));
     }
     let profile = st
@@ -172,6 +183,198 @@ pub async fn get_event(
         "origin_server_ts": now_ms(),
         "pdus": [entry.event],
     })))
+}
+
+/// Minimal percent-decoder for query values (event ids carry `$`, `:` etc.).
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'%' if i + 2 < b.len() => match u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                Ok(h) => {
+                    out.push(h);
+                    i += 3;
+                }
+                Err(_) => {
+                    out.push(b[i]);
+                    i += 1;
+                }
+            },
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            c => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// `GET /_matrix/federation/v1/backfill/{roomId}?v=<eventId>&limit=N` — walk the
+/// room DAG backward from the seed events (`v`), newest-first, returning up to
+/// `limit` PDUs. Mirrors strix `postFederationBackfill` / Synapse
+/// `_get_backfill_events`.
+pub async fn get_backfill(
+    State(st): State<AppState>,
+    _auth: FedAuth,
+    axum::extract::Path(room_id): axum::extract::Path<String>,
+    axum::extract::RawQuery(q): axum::extract::RawQuery,
+) -> MatrixResult<Json<Value>> {
+    let q = q.unwrap_or_default();
+    let mut seeds: Vec<String> = Vec::new();
+    let mut limit = 100usize;
+    for kv in q.split('&') {
+        if let Some(v) = kv.strip_prefix("v=") {
+            seeds.push(percent_decode(v));
+        } else if let Some(v) = kv.strip_prefix("limit=") {
+            if let Ok(n) = v.parse::<usize>() {
+                limit = n.min(100);
+            }
+        }
+    }
+
+    let in_room = |ev: &Value| ev.get("room_id").and_then(Value::as_str) == Some(room_id.as_str());
+    let depth_ts = |ev: &Value| {
+        (
+            ev.get("depth").and_then(Value::as_i64).unwrap_or(0),
+            ev.get("origin_server_ts").and_then(Value::as_i64).unwrap_or(0),
+        )
+    };
+
+    // frontier: (id, depth, ts); processed newest-first.
+    let mut frontier: Vec<(String, i64, i64)> = Vec::new();
+    for s in &seeds {
+        if let Some(e) = st.storage.get_event(&EventId::from(s.as_str())).await {
+            if in_room(&e.event) {
+                let (d, t) = depth_ts(&e.event);
+                frontier.push((s.clone(), d, t));
+            }
+        }
+    }
+
+    let mut collected: Vec<Value> = Vec::new();
+    let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut budget = 5000;
+    while !frontier.is_empty() && collected.len() < limit && budget > 0 {
+        budget -= 1;
+        frontier.sort_by(|a, b| b.1.cmp(&a.1).then(b.2.cmp(&a.2)));
+        let (id, _, _) = frontier.remove(0);
+        if !visited.insert(id.clone()) {
+            continue;
+        }
+        let Some(e) = st.storage.get_event(&EventId::from(id.as_str())).await else {
+            continue;
+        };
+        if !in_room(&e.event) {
+            continue;
+        }
+        for prev in e.event.get("prev_events").and_then(Value::as_array).cloned().unwrap_or_default() {
+            let Some(pid) = prev.as_str() else { continue };
+            if visited.contains(pid) || frontier.iter().any(|f| f.0 == pid) {
+                continue;
+            }
+            if let Some(pe) = st.storage.get_event(&EventId::from(pid)).await {
+                if in_room(&pe.event) {
+                    let (d, t) = depth_ts(&pe.event);
+                    frontier.push((pid.to_string(), d, t));
+                }
+            }
+        }
+        collected.push(e.event);
+    }
+    collected.sort_by(|a, b| {
+        let (da, ta) = depth_ts(a);
+        let (db, tb) = depth_ts(b);
+        db.cmp(&da).then(tb.cmp(&ta))
+    });
+    Ok(Json(json!({
+        "origin": st.server_name.as_ref(),
+        "origin_server_ts": now_ms(),
+        "pdus": collected,
+    })))
+}
+
+/// `POST /_matrix/federation/v1/get_missing_events/{roomId}`.
+///
+/// Walk the room DAG backwards from `latest_events` (excluded) following
+/// prev_events, stopping at `earliest_events` (the boundary, excluded) or the
+/// limit, and return the discovered events oldest-first. Mirrors strix
+/// `postFederationMissingEvents` / Synapse `_get_missing_events`.
+pub async fn get_missing_events(
+    State(st): State<AppState>,
+    axum::extract::Path(room_id): axum::extract::Path<String>,
+    auth: crate::middleware::federation_auth::FedAuthBody,
+) -> MatrixResult<Json<Value>> {
+    let body = &auth.body;
+    let limit = body.get("limit").and_then(Value::as_u64).unwrap_or(10).min(20) as usize;
+
+    let earliest: std::collections::HashSet<String> = body
+        .get("earliest_events")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    let latest: Vec<String> = body
+        .get("latest_events")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+
+    // Determine the room (path may not carry it in the signed body, so fall back
+    // to the first latest event's room).
+    let mut seen = earliest;
+    let mut front: Vec<String> = latest.into_iter().filter(|id| !seen.contains(id)).collect();
+
+    let mut result: Vec<(Value, String)> = Vec::new();
+    let mut budget = 5000;
+    while !front.is_empty() && result.len() < limit && budget > 0 {
+        budget -= 1;
+        let mut next: Vec<String> = Vec::new();
+        for id in &front {
+            if result.len() >= limit {
+                break;
+            }
+            let Some(entry) = st.storage.get_event(&EventId::from(id.as_str())).await else {
+                continue;
+            };
+            if entry.event.get("room_id").and_then(Value::as_str) != Some(room_id.as_str()) {
+                continue;
+            }
+            let prevs = entry.event.get("prev_events").and_then(Value::as_array).cloned().unwrap_or_default();
+            for prev in prevs {
+                let Some(prev_id) = prev.as_str() else { continue };
+                if seen.contains(prev_id) {
+                    continue;
+                }
+                seen.insert(prev_id.to_string());
+                if result.len() >= limit {
+                    break;
+                }
+                if let Some(pe) = st.storage.get_event(&EventId::from(prev_id)).await {
+                    if pe.event.get("room_id").and_then(Value::as_str) == Some(room_id.as_str()) {
+                        result.push((pe.event, prev_id.to_string()));
+                        next.push(prev_id.to_string());
+                    }
+                }
+            }
+        }
+        front = next;
+    }
+
+    // Oldest-first: sort by (depth, origin_server_ts, event_id) ascending.
+    result.sort_by(|a, b| {
+        let da = a.0.get("depth").and_then(Value::as_i64).unwrap_or(0);
+        let db = b.0.get("depth").and_then(Value::as_i64).unwrap_or(0);
+        let ta = a.0.get("origin_server_ts").and_then(Value::as_i64).unwrap_or(0);
+        let tb = b.0.get("origin_server_ts").and_then(Value::as_i64).unwrap_or(0);
+        da.cmp(&db).then(ta.cmp(&tb)).then(a.1.cmp(&b.1))
+    });
+    let events: Vec<Value> = result.into_iter().map(|(e, _)| e).collect();
+    Ok(Json(json!({ "events": events })))
 }
 
 /// `GET /_matrix/federation/v1/state/{roomId}`.

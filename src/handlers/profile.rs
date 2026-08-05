@@ -8,7 +8,7 @@ use axum::extract::{Path, State};
 use axum::response::Json;
 use serde_json::{json, Map, Value};
 
-use crate::errors::{bad_json, forbidden, not_found, MatrixResult};
+use crate::errors::{bad_json, forbidden, not_found, MatrixError, MatrixResult};
 use crate::events::get_membership;
 use crate::room_ops::{send_state_event, EventContext};
 use crate::server::{AppState, AuthCtx};
@@ -41,6 +41,11 @@ pub async fn get_profile(
     State(st): State<AppState>,
     Path(user_id): Path<String>,
 ) -> MatrixResult<Json<Value>> {
+    // Remote user: resolve the profile over federation (TestOutboundFederationProfile).
+    if let Some(remote) = remote_profile(&st, &user_id).await? {
+        return Ok(Json(remote));
+    }
+
     let uid = UserId::from(user_id.as_str());
     let profile = st
         .storage
@@ -65,6 +70,9 @@ pub async fn get_displayname(
     State(st): State<AppState>,
     Path(user_id): Path<String>,
 ) -> MatrixResult<Json<Value>> {
+    if let Some(remote) = remote_profile(&st, &user_id).await? {
+        return Ok(Json(json!({ "displayname": remote.get("displayname") })));
+    }
     let uid = UserId::from(user_id.as_str());
     let profile = st
         .storage
@@ -74,11 +82,36 @@ pub async fn get_displayname(
     Ok(Json(json!({ "displayname": profile.displayname })))
 }
 
+/// Fetch a remote user's profile over federation. Returns `Ok(None)` for a local
+/// user, `Ok(Some(body))` on a successful remote query, and `Err(404)` when the
+/// user is remote but the query fails.
+async fn remote_profile(st: &AppState, user_id: &str) -> Result<Option<Value>, MatrixError> {
+    let domain = crate::ids::domain_of(user_id);
+    if domain.is_empty() || domain == st.server_name.as_ref() {
+        return Ok(None);
+    }
+    if let Some(client) = &st.federation_client {
+        let path = format!(
+            "/_matrix/federation/v1/query/profile?user_id={}",
+            crate::handlers::federation::membership::urlencode_public(user_id)
+        );
+        if let Ok(resp) = client.request(domain, "GET", &path, None).await {
+            if resp.status == 200 {
+                return Ok(Some(resp.body));
+            }
+        }
+    }
+    Err(not_found("User not found"))
+}
+
 /// `GET /_matrix/client/v3/profile/{userId}/avatar_url`.
 pub async fn get_avatar_url(
     State(st): State<AppState>,
     Path(user_id): Path<String>,
 ) -> MatrixResult<Json<Value>> {
+    if let Some(remote) = remote_profile(&st, &user_id).await? {
+        return Ok(Json(json!({ "avatar_url": remote.get("avatar_url") })));
+    }
     let uid = UserId::from(user_id.as_str());
     let profile = st
         .storage

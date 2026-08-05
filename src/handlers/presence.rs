@@ -46,6 +46,30 @@ pub async fn put_presence(
     let presence = parse_presence(body.get("presence").and_then(Value::as_str));
     let status_msg = body.get("status_msg").and_then(Value::as_str);
     st.storage.set_presence(&uid, presence, status_msg).await;
+
+    // Federate the presence update to every remote server sharing a room with
+    // this user (Synapse wraps per-user updates in a top-level `push` array) —
+    // TestRemotePresence.
+    if let Some(fed) = &st.federation_client {
+        let room_ids = st.storage.get_rooms_for_user(&uid).await;
+        if !room_ids.is_empty() {
+            let mut update = serde_json::Map::new();
+            update.insert("user_id".to_string(), json!(user_id));
+            update.insert("presence".to_string(), json!(presence_str(&presence)));
+            if let Some(msg) = status_msg {
+                update.insert("status_msg".to_string(), json!(msg));
+            }
+            update.insert("last_active_ago".to_string(), json!(0));
+            crate::federation::outbound::fanout_edu_to_room_servers(
+                &*st.storage,
+                fed,
+                &st.server_name,
+                &room_ids,
+                json!({ "edu_type": "m.presence", "content": { "push": [Value::Object(update)] } }),
+            )
+            .await;
+        }
+    }
     Ok(Json(json!({})))
 }
 

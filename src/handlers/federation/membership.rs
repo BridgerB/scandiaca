@@ -557,8 +557,15 @@ async fn send_leave_impl(
 ) -> MatrixResult<Response> {
     let mut event = auth.body;
     let membership = event.get("content").and_then(|c| c.get("membership")).and_then(Value::as_str);
+    let state_key = event.get("state_key").and_then(Value::as_str);
+    let sender = event.get("sender").and_then(Value::as_str);
+    // Must be a state m.room.member leave/ban whose state_key is the sender
+    // (TestCannotSendNonLeaveViaSendLeave: reject regular events, non-state
+    // membership events, wrong membership, and mismatched state keys with 400).
     if event.get("type").and_then(Value::as_str) != Some("m.room.member")
         || (membership != Some("leave") && membership != Some("ban"))
+        || state_key.is_none()
+        || state_key != sender
     {
         return Err(bad_json("Not a valid leave event"));
     }
@@ -684,7 +691,16 @@ pub async fn send_knock(
     auth: FedAuthBody,
 ) -> MatrixResult<Response> {
     let event = auth.body;
-    if event.get("content").and_then(|c| c.get("membership")).and_then(Value::as_str) != Some("knock") {
+    let membership = event.get("content").and_then(|c| c.get("membership")).and_then(Value::as_str);
+    let state_key = event.get("state_key").and_then(Value::as_str);
+    let sender = event.get("sender").and_then(Value::as_str);
+    // Must be a state m.room.member knock whose state_key is the sender
+    // (TestCannotSendNonKnockViaSendKnock / TestCannotSendKnockViaSendKnock).
+    if event.get("type").and_then(Value::as_str) != Some("m.room.member")
+        || membership != Some("knock")
+        || state_key.is_none()
+        || state_key != sender
+    {
         return Err(bad_json("Not a valid knock event"));
     }
     let room = st.storage.get_room(&RoomId::from(room_id.as_str())).await.ok_or_else(|| not_found("Room not found"))?;

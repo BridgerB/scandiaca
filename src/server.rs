@@ -282,6 +282,14 @@ pub fn build_router(state: AppState) -> Router {
             get(handlers::federation::get_event_auth),
         )
         .route(
+            "/_matrix/federation/v1/get_missing_events/{roomId}",
+            post(handlers::federation::get_missing_events),
+        )
+        .route(
+            "/_matrix/federation/v1/backfill/{roomId}",
+            get(handlers::federation::get_backfill),
+        )
+        .route(
             "/_matrix/federation/v1/make_join/{roomId}/{userId}",
             get(handlers::federation::membership::make_join),
         )
@@ -529,6 +537,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/_matrix/client/v3/rooms/{roomId}/messages",
             get(handlers::room_events::get_messages),
+        )
+        .route(
+            "/_matrix/client/v1/rooms/{roomId}/timestamp_to_event",
+            get(handlers::room_events::get_timestamp_to_event),
         )
         .route(
             "/_matrix/client/v3/rooms/{roomId}/event/{eventId}",
@@ -783,6 +795,9 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/_matrix/client/v3/sync", get(handlers::sync::sync))
         .fallback(unrecognized)
+        // A known path hit with an unsupported method must still return the JSON
+        // M_UNRECOGNIZED error (not a bare 405 with an empty body) — TestUnknownEndpoints.
+        .method_not_allowed_fallback(method_not_allowed)
         .layer(middleware::from_fn(cors))
         // Allow media uploads up to ~60 MB (default axum limit is 2 MB).
         .layer(axum::extract::DefaultBodyLimit::max(60 * 1024 * 1024))
@@ -929,6 +944,16 @@ async fn key_server(State(st): State<AppState>) -> Json<Value> {
 async fn unrecognized() -> Response {
     (
         StatusCode::NOT_FOUND,
+        Json(json!({ "errcode": "M_UNRECOGNIZED", "error": "Unrecognized request" })),
+    )
+        .into_response()
+}
+
+/// 405 fallback for a known path hit with an unsupported method — still the JSON
+/// M_UNRECOGNIZED error (TestUnknownEndpoints expects 405 with a JSON body).
+async fn method_not_allowed() -> Response {
+    (
+        StatusCode::METHOD_NOT_ALLOWED,
         Json(json!({ "errcode": "M_UNRECOGNIZED", "error": "Unrecognized request" })),
     )
         .into_response()

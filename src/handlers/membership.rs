@@ -105,6 +105,30 @@ pub async fn join(
     extra.remove("membership");
     let reason = extra.remove("reason").and_then(|v| v.as_str().map(String::from));
 
+    // Restricted/knock_restricted rooms (MSC3083): a join that is neither a
+    // rejoin nor invite-acceptance must be authorised by a local user with invite
+    // power, recorded in content.join_authorised_via_users_server, or the join
+    // event fails auth. Enforce the allow-rules before stamping the authoriser.
+    let join_rule = crate::room_ops::get_join_rule(&room);
+    let current = get_membership(&room, user_id);
+    if (join_rule == "restricted" || join_rule == "knock_restricted")
+        && current != Some("join")
+        && current != Some("invite")
+    {
+        if let Some(authoriser) = crate::room_ops::find_authorising_local_user(&room, &st.server_name) {
+            let satisfies =
+                crate::room_ops::user_satisfies_restricted_allow(&*st.storage, &room, user_id, None).await;
+            if !satisfies {
+                return Err(forbidden(
+                    "You are not a member of any room that grants access to this room",
+                ));
+            }
+            extra.insert("join_authorised_via_users_server".to_string(), json!(authoriser));
+        }
+        // No local authoriser: fall through to the normal (federation-capable)
+        // path; a purely local restricted room always has a local authoriser.
+    }
+
     send_membership_event(
         &*st.storage,
         &st.server_name,
