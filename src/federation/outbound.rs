@@ -156,6 +156,103 @@ pub async fn fanout_event(
     }
 }
 
+/// Fill DAG gaps by pulling history from a remote server in the room via
+/// `GET /_matrix/federation/v1/backfill`. Each returned PDU is content-hash +
+/// origin-signature verified, deduped, persisted, and relation-indexed — exactly
+/// like an inbound transaction PDU. Bounded rounds. Mirrors strix
+/// `backfillMissingHistory`. Returns the number of events imported.
+pub async fn backfill_missing_history(
+    storage: &dyn Storage,
+    client: &FederationClient,
+    server_name: &str,
+    room_id: &crate::types::identifiers::RoomId,
+    room_version: Option<&str>,
+) -> usize {
+    use crate::events::{compute_content_hash, compute_event_id};
+    let servers: Vec<String> = storage
+        .get_servers_in_room(room_id)
+        .await
+        .into_iter()
+        .map(|s| s.as_str().to_string())
+        .filter(|s| s != server_name && !s.is_empty())
+        .collect();
+    if servers.is_empty() {
+        return 0;
+    }
+    let mut imported = 0usize;
+    for _round in 0..2 {
+        let all = storage
+            .get_events_by_room(room_id, 1_000_000, Some(0), crate::storage::Direction::Forward)
+            .await;
+        let known: std::collections::HashSet<String> =
+            all.events.iter().map(|e| e.event_id.as_str().to_string()).collect();
+        let mut seeds: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for e in &all.events {
+            for prev in e.event.get("prev_events").and_then(Value::as_array).into_iter().flatten() {
+                if let Some(p) = prev.as_str() {
+                    if !known.contains(p) {
+                        seeds.insert(p.to_string());
+                    }
+                }
+            }
+        }
+        if seeds.is_empty() {
+            break;
+        }
+        let qs: String = seeds
+            .iter()
+            .take(10)
+            .map(|id| format!("v={}", crate::handlers::federation::membership::urlencode_public(id)))
+            .collect::<Vec<_>>()
+            .join("&");
+        let path = format!(
+            "/_matrix/federation/v1/backfill/{}?{qs}&limit=100",
+            crate::handlers::federation::membership::urlencode_public(room_id.as_str())
+        );
+        let mut round_imported = 0usize;
+        for server in &servers {
+            let Ok(res) = client.request(server, "GET", &path, None).await else {
+                continue;
+            };
+            if res.status != 200 {
+                continue;
+            }
+            let Some(pdus) = res.body.get("pdus").and_then(Value::as_array) else {
+                continue;
+            };
+            for pdu in pdus {
+                if pdu.get("room_id").and_then(Value::as_str) != Some(room_id.as_str()) {
+                    continue;
+                }
+                if pdu.get("hashes").and_then(|h| h.get("sha256")).and_then(Value::as_str)
+                    != Some(compute_content_hash(pdu).as_str())
+                {
+                    continue;
+                }
+                let eid = compute_event_id(pdu, room_version);
+                let eid_typed = crate::types::identifiers::EventId::from(eid.as_str());
+                if storage.get_event(&eid_typed).await.is_some() {
+                    continue;
+                }
+                if crate::federation::verify::verify_origin_signature(pdu, storage, client, room_version).await.is_err() {
+                    continue;
+                }
+                storage.store_event(pdu.clone(), &eid_typed).await;
+                crate::relations::index_relation(storage, pdu, &eid_typed).await;
+                imported += 1;
+                round_imported += 1;
+            }
+            if round_imported > 0 {
+                break;
+            }
+        }
+        if round_imported == 0 {
+            break;
+        }
+    }
+    imported
+}
+
 /// Deliver an EDU to every remote server resident in a room (typing/receipts).
 pub async fn fanout_edu_to_room(
     storage: &dyn Storage,

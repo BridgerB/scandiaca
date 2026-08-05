@@ -24,6 +24,24 @@ use crate::types::identifiers::{EventId, RoomId};
 
 const MAX_EVENT_SIZE: usize = 65536;
 
+/// An event's DAG depth (for topological ordering).
+fn event_depth(event: &Value) -> i64 {
+    event.get("depth").and_then(Value::as_i64).unwrap_or(0)
+}
+
+/// Synapse-style topological pagination token `t<depth>-<stream>` — stable as
+/// backfill adds earlier events (strix `topoToken`).
+fn topo_token(depth: i64, stream: i64) -> String {
+    format!("t{depth}-{stream}")
+}
+
+/// Parse a `t<depth>-<stream>` token into `(depth, stream)`.
+fn parse_topo_token(s: &str) -> Option<(i64, i64)> {
+    let rest = s.strip_prefix('t')?;
+    let (d, st) = rest.split_once('-')?;
+    Some((d.parse().ok()?, st.parse().ok()?))
+}
+
 /// `PUT /_matrix/client/v3/rooms/{roomId}/send/{eventType}/{txnId}`.
 pub async fn put_send_event(
     State(st): State<AppState>,
@@ -526,16 +544,93 @@ pub async fn get_messages(
     let read = require_can_read_room(&*st.storage, &room_id, auth.user_id.as_str()).await?;
 
     let forward = params.get("dir").map(String::as_str) == Some("f");
-    let direction = if forward { Direction::Forward } else { Direction::Backward };
     let limit: usize = params
         .get("limit")
         .and_then(|l| l.parse().ok())
         .unwrap_or(10);
-    let from: Option<i64> = params.get("from").and_then(|f| f.parse().ok());
+    let from_str = params.get("from").cloned();
+    // Token kinds: `t<depth>-<stream>` topological (stable across backfill), else a
+    // plain stream position (also a /sync prev_batch).
+    let topo_from = from_str.as_deref().and_then(parse_topo_token);
+    let from: Option<i64> = from_str
+        .as_deref()
+        .filter(|_| topo_from.is_none())
+        .and_then(|s| s.parse().ok());
+    // The /messages filter is a RoomEventFilter directly; apply it to the
+    // timeline events (TestRoomImageRoundtrip filters by type).
+    let tl_filter: Option<crate::types::filters::RoomEventFilter> =
+        params.get("filter").and_then(|f| serde_json::from_str(f).ok());
 
-    // Departed reader (SPEC-216): timeline clamped to the leave point.
-    let (chunk, end): (Vec<Value>, Option<i64>) = if let Some(pos) = read.leave_pos {
+    // Decide whether to serve a DAG (topological) backward view: continuing a
+    // topo token, or paginating back into a room with gappy/out-of-order federated
+    // history. Departed readers stay on the clamped local path.
+    let mut use_topo = false;
+    if !forward && read.leave_pos.is_none() {
+        if topo_from.is_some() {
+            use_topo = true;
+        } else if st.federation_client.is_some() {
+            let remote = st
+                .storage
+                .get_servers_in_room(&room_id)
+                .await
+                .into_iter()
+                .any(|s| s.as_str() != st.server_name.as_ref() && !s.as_str().is_empty());
+            if remote {
+                let all = st.storage.get_events_by_room_since(&room_id, 0, 1_000_000).await;
+                let known: std::collections::HashSet<&str> =
+                    all.events.iter().map(|e| e.event_id.as_str()).collect();
+                let idx: HashMap<&str, usize> =
+                    all.events.iter().enumerate().map(|(i, e)| (e.event_id.as_str(), i)).collect();
+                let has_gap = all.events.iter().any(|e| {
+                    e.event.get("prev_events").and_then(Value::as_array).into_iter().flatten().any(|p| {
+                        p.as_str().map(|p| !known.contains(p)).unwrap_or(false)
+                    })
+                });
+                let out_of_order = all.events.iter().enumerate().any(|(i, e)| {
+                    e.event.get("prev_events").and_then(Value::as_array).into_iter().flatten().any(|p| {
+                        p.as_str().and_then(|p| idx.get(p)).map(|pi| *pi > i).unwrap_or(false)
+                    })
+                });
+                use_topo = has_gap || out_of_order;
+            }
+        }
+    }
+
+    let (chunk, end): (Vec<Value>, Option<String>) = if use_topo {
+        // Backfill the gap (no-op when fully held), then serve a depth-ordered view
+        // with topological pagination tokens.
+        if let Some(fed) = &st.federation_client {
+            let rv = st.storage.get_room(&room_id).await.map(|r| r.room_version);
+            crate::federation::outbound::backfill_missing_history(
+                &*st.storage, fed, &st.server_name, &room_id, rv.as_deref(),
+            )
+            .await;
+        }
+        let all = st.storage.get_events_by_room_since(&room_id, 0, 1_000_000).await;
+        let mut ordered: Vec<&crate::storage::interface::StreamEventRecord> = all
+            .events
+            .iter()
+            .filter(|e| crate::event_filter::matches_room_event_filter(&e.event, tl_filter.as_ref()))
+            .collect();
+        ordered.sort_by(|a, b| (event_depth(&a.event), a.stream_pos).cmp(&(event_depth(&b.event), b.stream_pos)));
+
+        let boundary: Option<(i64, i64)> = topo_from.or_else(|| {
+            from.and_then(|f| ordered.iter().find(|e| e.stream_pos == f).map(|e| (event_depth(&e.event), e.stream_pos)))
+        });
+        let candidates: Vec<&&crate::storage::interface::StreamEventRecord> = match boundary {
+            Some((bd, bs)) => ordered.iter().filter(|e| (event_depth(&e.event), e.stream_pos) < (bd, bs)).collect(),
+            None => ordered.iter().collect(),
+        };
+        let start_i = candidates.len().saturating_sub(limit);
+        let page_asc = &candidates[start_i..];
+        let more = candidates.len() > page_asc.len();
+        let end = page_asc.first().filter(|_| more).map(|e| topo_token(event_depth(&e.event), e.stream_pos));
+        let chunk = page_asc.iter().rev().map(|e| client_event(&e.event, e.event_id.as_str())).collect();
+        (chunk, end)
+    } else if let Some(pos) = read.leave_pos {
+        // Departed reader (SPEC-216): timeline clamped to the leave point.
         let mut clamped = events_up_to(&*st.storage, &room_id, pos).await;
+        clamped.retain(|e| crate::event_filter::matches_room_event_filter(&e.event, tl_filter.as_ref()));
         if forward {
             let from_pos = from.unwrap_or(0);
             clamped.retain(|e| e.stream_pos > from_pos);
@@ -544,24 +639,36 @@ pub async fn get_messages(
             clamped.retain(|e| e.stream_pos < from_pos);
             clamped.reverse();
         }
-        let end = clamped.get(limit.saturating_sub(1)).or_else(|| clamped.last()).map(|e| e.stream_pos);
-        let chunk = clamped
-            .into_iter()
-            .take(limit)
-            .map(|e| client_event(&e.event, e.event_id.as_str()))
-            .collect();
+        let end = clamped.get(limit.saturating_sub(1)).or_else(|| clamped.last()).map(|e| e.stream_pos.to_string());
+        let chunk = clamped.into_iter().take(limit).map(|e| client_event(&e.event, e.event_id.as_str())).collect();
         (chunk, end)
     } else {
-        let page = st.storage.get_events_by_room(&room_id, limit, from, direction).await;
-        let chunk = page
+        // Normal pagination: select by stream-position bound but ORDER
+        // topologically (depth, then stream) so out-of-DAG-order arrivals scroll
+        // back into their DAG position (TestNetworkPartitionOrdering).
+        let all = st.storage.get_events_by_room_since(&room_id, 0, 1_000_000).await;
+        let mut ordered: Vec<&crate::storage::interface::StreamEventRecord> = all
             .events
             .iter()
-            .map(|er| client_event(&er.event, er.event_id.as_str()))
+            .filter(|e| crate::event_filter::matches_room_event_filter(&e.event, tl_filter.as_ref()))
             .collect();
-        (chunk, page.end)
+        ordered.sort_by(|a, b| (event_depth(&a.event), a.stream_pos).cmp(&(event_depth(&b.event), b.stream_pos)));
+        if forward {
+            let lower = from.unwrap_or(i64::MIN);
+            let page: Vec<_> = ordered.iter().filter(|e| e.stream_pos > lower).take(limit).collect();
+            let end = page.last().map(|e| e.stream_pos.to_string());
+            (page.iter().map(|e| client_event(&e.event, e.event_id.as_str())).collect(), end)
+        } else {
+            let upper = from.unwrap_or(i64::MAX);
+            let eligible: Vec<_> = ordered.iter().filter(|e| e.stream_pos <= upper).collect();
+            let start_i = eligible.len().saturating_sub(limit);
+            let page = &eligible[start_i..];
+            let end = page.first().map(|e| (e.stream_pos - 1).to_string());
+            (page.iter().rev().map(|e| client_event(&e.event, e.event_id.as_str())).collect(), end)
+        }
     };
 
-    let start = from.map(|f| f.to_string()).unwrap_or_else(|| "0".to_string());
+    let start = from_str.clone().unwrap_or_else(|| "0".to_string());
 
     // Lazy-loading (?filter with lazy_load_members): include a `state` block with
     // the m.room.member event for each distinct sender in the chunk
@@ -574,7 +681,7 @@ pub async fn get_messages(
     let mut body = serde_json::Map::new();
     body.insert("chunk".to_string(), Value::Array(chunk.clone()));
     body.insert("start".to_string(), json!(start));
-    body.insert("end".to_string(), json!(end.map(|e| e.to_string())));
+    body.insert("end".to_string(), json!(end));
     if lazy {
         let mut seen = std::collections::HashSet::new();
         let mut state = Vec::new();

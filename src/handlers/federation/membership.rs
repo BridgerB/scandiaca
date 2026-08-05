@@ -115,6 +115,12 @@ pub async fn perform_federation_join(
         st.storage
             .set_state_event(&RoomId::from(room_id), stored_event, &EventId::from(event_id.as_str()))
             .await;
+        // Backfill recent history so the newly-joined room's timeline shows shared
+        // history in /sync and /messages (TestMessagesOverFederation).
+        crate::federation::outbound::backfill_missing_history(
+            &*st.storage, client, &st.server_name, &RoomId::from(room_id), Some(&room_version),
+        )
+        .await;
         return Ok(());
     }
     Err(last_err)
