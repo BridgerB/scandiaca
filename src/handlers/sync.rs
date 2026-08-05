@@ -129,17 +129,6 @@ pub async fn sync(
     for m in &memberships {
         let room_id = &m.room_id;
 
-        // A forgotten room must never appear in sync.
-        let forgotten = st
-            .storage
-            .get_room_account_data(&auth.user_id, room_id, "m.internal.forgotten")
-            .await
-            .and_then(|d| d.get("forgotten").and_then(Value::as_bool))
-            == Some(true);
-        if forgotten {
-            continue;
-        }
-
         match m.membership.as_str() {
             "join" => {
                 let (room_json, has_content) =
@@ -252,9 +241,21 @@ pub async fn sync(
                 }
             }
             "leave" | "ban" => {
-                // Initial sync: only when the filter opts into archived rooms.
-                // Incremental sync: whenever the leave/ban happened in this window.
-                let want = if is_initial { filter.include_leave } else { true };
+                // Initial sync: only when the filter opts into archived rooms AND the
+                // room isn't forgotten. Incremental sync: whenever the leave/ban
+                // happened in this window — forgetting does NOT hide an in-window
+                // leave (TestRoomForget: leave shows in the sync spanning it).
+                let want = if is_initial {
+                    let forgotten = st
+                        .storage
+                        .get_room_account_data(&auth.user_id, room_id, "m.internal.forgotten")
+                        .await
+                        .and_then(|d| d.get("forgotten").and_then(Value::as_bool))
+                        == Some(true);
+                    filter.include_leave && !forgotten
+                } else {
+                    true
+                };
                 if want {
                     if let Some(lr) = build_leave_room(&st, room_id, auth.user_id.as_str(), is_initial, since_pos, &filter).await {
                         leave.insert(room_id.to_string(), lr);

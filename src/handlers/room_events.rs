@@ -8,7 +8,7 @@ use axum::response::Json;
 use serde_json::{json, Value};
 
 use super::client_event;
-use crate::errors::{bad_json, forbidden, not_found, MatrixError, MatrixResult};
+use crate::errors::{bad_json, forbidden, invalid_param, not_found, MatrixError, MatrixResult};
 use crate::events::{
     build_event, check_event_auth, get_user_power_level, pdu_to_client_event, redact_event,
     select_auth_events, BuildEventParams,
@@ -155,6 +155,33 @@ pub async fn put_state_event(
     }
     let rid = RoomId::from(room_id.as_str());
     let room = require_joined_room(&*st.storage, &rid, auth.user_id.as_str()).await?;
+
+    // m.room.canonical_alias: every alias (primary + alt_aliases) must be
+    // well-formed (else M_INVALID_PARAM) and resolve to this room (else
+    // M_BAD_ALIAS) — TestRoomCanonicalAlias.
+    if event_type == "m.room.canonical_alias" {
+        let mut candidates: Vec<String> = Vec::new();
+        if let Some(a) = content.get("alias").and_then(Value::as_str) {
+            candidates.push(a.to_string());
+        }
+        if let Some(alts) = content.get("alt_aliases").and_then(Value::as_array) {
+            candidates.extend(alts.iter().filter_map(|a| a.as_str().map(String::from)));
+        }
+        for c in candidates {
+            if !c.starts_with('#') || !c.contains(':') {
+                return Err(invalid_param(format!("Invalid alias: {c}")));
+            }
+            let resolves = st
+                .storage
+                .get_room_by_alias(&crate::types::identifiers::RoomAlias::from(c.as_str()))
+                .await
+                .map(|r| r.room_id.as_str() == room_id)
+                .unwrap_or(false);
+            if !resolves {
+                return Err(MatrixError::new("M_BAD_ALIAS", format!("Alias {c} does not point to this room"), 400));
+            }
+        }
+    }
 
     let mut ctx = EventContext {
         depth: room.depth,
