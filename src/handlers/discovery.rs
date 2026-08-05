@@ -6,7 +6,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use serde_json::{json, Value};
 
-use crate::server::AppState;
+use crate::server::{AppState, AuthCtx};
 
 /// `GET /_matrix/client/versions` — also the health check.
 pub async fn versions() -> Json<Value> {
@@ -59,8 +59,8 @@ pub async fn auth_metadata() -> Response {
         .into_response()
 }
 
-/// `GET /_matrix/client/v3/capabilities`.
-pub async fn capabilities() -> Json<Value> {
+/// `GET /_matrix/client/v3/capabilities` (requires auth — 401 without a token).
+pub async fn capabilities(_auth: AuthCtx) -> Json<Value> {
     Json(json!({
         "capabilities": {
             "m.change_password": { "enabled": true },

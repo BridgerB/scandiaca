@@ -455,6 +455,15 @@ pub fn build_router(state: AppState) -> Router {
                 .put(handlers::account_data::put_room)
                 .delete(handlers::account_data::delete_room),
         )
+        // MSC3391 unstable delete-account-data endpoints (TestRemovingAccountData).
+        .route(
+            "/_matrix/client/unstable/org.matrix.msc3391/user/{userId}/account_data/{type}",
+            axum::routing::delete(handlers::account_data::delete_global),
+        )
+        .route(
+            "/_matrix/client/unstable/org.matrix.msc3391/user/{userId}/rooms/{roomId}/account_data/{type}",
+            axum::routing::delete(handlers::account_data::delete_room),
+        )
         .route(
             "/_matrix/client/v3/user/{userId}/rooms/{roomId}/tags",
             get(handlers::account_data::get_tags),
