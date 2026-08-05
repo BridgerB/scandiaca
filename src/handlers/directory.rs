@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use crate::errors::{bad_json, forbidden, not_found, MatrixResult};
 use crate::events::{get_membership, get_user_power_level};
 use crate::ids::domain_of;
-use crate::room_ops::require_joined_room;
+use crate::room_ops::{require_joined_room, send_state_event, EventContext};
 use crate::server::{AppState, AuthCtx};
 use crate::storage::Visibility;
 use crate::types::identifiers::{RoomAlias, RoomId};
@@ -96,6 +96,53 @@ pub async fn delete_alias(
         }
     }
     st.storage.delete_room_alias(&alias).await;
+
+    // If the room's m.room.canonical_alias referenced this alias (as `alias` or in
+    // `alt_aliases`), emit an updated canonical_alias with it removed, so the state
+    // stays consistent and the change is observable via /sync (TestRoomDeleteAlias).
+    if let Some(room) = room {
+        if let Some(canonical) = room.state_events.get("m.room.canonical_alias\u{1f}") {
+            let content = canonical.get("content").cloned().unwrap_or_else(|| json!({}));
+            let a = room_alias.as_str();
+            let refs = content.get("alias").and_then(Value::as_str) == Some(a)
+                || content
+                    .get("alt_aliases")
+                    .and_then(Value::as_array)
+                    .map(|arr| arr.iter().any(|x| x.as_str() == Some(a)))
+                    .unwrap_or(false);
+            if refs && get_user_power_level(auth.user_id.as_str(), &room) >= 50.0 {
+                let mut new_content = serde_json::Map::new();
+                if let Some(cur) = content.get("alias").and_then(Value::as_str) {
+                    if cur != a {
+                        new_content.insert("alias".to_string(), json!(cur));
+                    }
+                }
+                if let Some(alts) = content.get("alt_aliases").and_then(Value::as_array) {
+                    let kept: Vec<&Value> = alts.iter().filter(|x| x.as_str() != Some(a)).collect();
+                    if !kept.is_empty() {
+                        new_content.insert("alt_aliases".to_string(), json!(kept));
+                    }
+                }
+                let mut ctx = EventContext {
+                    depth: room.depth,
+                    prev_events: room.forward_extremities.iter().map(|e| e.as_str().to_string()).collect(),
+                    room_state: room,
+                };
+                let _ = send_state_event(
+                    &*st.storage,
+                    &st.server_name,
+                    &mut ctx,
+                    auth.user_id.as_str(),
+                    "m.room.canonical_alias",
+                    "",
+                    Value::Object(new_content),
+                    Some(st.signing_key.as_ref()),
+                    None,
+                )
+                .await;
+            }
+        }
+    }
     Ok(Json(json!({})))
 }
 

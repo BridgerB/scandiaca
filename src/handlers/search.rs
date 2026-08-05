@@ -75,14 +75,16 @@ pub async fn search(
         }));
     }
 
+    // Omit next_batch entirely on the last page (a present-but-null token would
+    // make clients paginate forever) — TestSearch back-pagination.
+    let mut room_events_resp = serde_json::Map::new();
+    room_events_resp.insert("count".to_string(), json!(result.count));
+    room_events_resp.insert("results".to_string(), json!(results));
+    room_events_resp.insert("highlights".to_string(), json!([search_term]));
+    if let Some(nb) = &result.next_batch {
+        room_events_resp.insert("next_batch".to_string(), json!(nb));
+    }
     Ok(Json(json!({
-        "search_categories": {
-            "room_events": {
-                "count": result.count,
-                "results": results,
-                "highlights": [search_term],
-                "next_batch": result.next_batch,
-            }
-        }
+        "search_categories": { "room_events": Value::Object(room_events_resp) }
     })))
 }
