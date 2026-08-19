@@ -142,7 +142,13 @@ impl E2eeStore for MemoryStorage {
         let mut s = self.write();
         let otks = s.one_time_keys.entry(mk).or_default();
         for (key_id, key) in keys {
-            otks.insert(key_id.to_string(), key);
+            let kid = key_id.to_string();
+            // Preserve upload order; replace an existing key_id in place.
+            if let Some(slot) = otks.iter_mut().find(|(k, _)| *k == kid) {
+                slot.1 = key;
+            } else {
+                otks.push((kid, key));
+            }
         }
     }
 
@@ -157,8 +163,9 @@ impl E2eeStore for MemoryStorage {
         let mut s = self.write();
         // Prefer a real one-time key (consumed on claim).
         if let Some(otks) = s.one_time_keys.get_mut(&mk) {
-            if let Some(key_id) = otks.keys().find(|k| k.starts_with(&prefix)).cloned() {
-                let key = otks.remove(&key_id).unwrap();
+            // FIFO: claim the oldest-uploaded key matching the algorithm.
+            if let Some(pos) = otks.iter().position(|(k, _)| k.starts_with(&prefix)) {
+                let (key_id, key) = otks.remove(pos);
                 return Some(OneTimeKeyClaim {
                     key_id: key_id.into(),
                     key,
@@ -185,7 +192,7 @@ impl E2eeStore for MemoryStorage {
         let s = self.read();
         let mut counts: BTreeMap<String, i64> = BTreeMap::new();
         if let Some(otks) = s.one_time_keys.get(&dk(user_id, device_id)) {
-            for key_id in otks.keys() {
+            for (key_id, _) in otks {
                 let algo = key_id.split(':').next().unwrap_or("").to_string();
                 *counts.entry(algo).or_insert(0) += 1;
             }

@@ -180,7 +180,8 @@ pub(crate) struct MemState {
     // E2EE.
     pub device_keys: HashMap<String, DeviceKeys>,
     pub device_list_stream: Vec<DeviceListEntry>,
-    pub one_time_keys: HashMap<String, BTreeMap<String, Value>>,
+    // Insertion-ordered so claims are FIFO by upload time (TestKeyClaimOrdering).
+    pub one_time_keys: HashMap<String, Vec<(String, Value)>>,
     pub fallback_keys: HashMap<String, BTreeMap<String, Value>>,
     pub cross_signing_keys: HashMap<String, CrossSigningKeys>,
     pub key_backup_versions: HashMap<String, Vec<KeyBackupVersionEntry>>,
