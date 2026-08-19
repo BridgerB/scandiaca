@@ -124,6 +124,12 @@ pub async fn sync(
     let display_name = st.storage.get_profile(&auth.user_id).await.and_then(|p| p.displayname);
     let ignored_users = get_ignored_users(&*st.storage, &auth.user_id).await;
     let ignored_invite_senders = get_ignored_invite_senders(&*st.storage, &auth.user_id).await;
+    // MSC4155 invite permission config (blocked/ignored users/servers).
+    let invite_config = st
+        .storage
+        .get_global_account_data(&auth.user_id, crate::invite_filter::INVITE_FILTER_ACCOUNT_DATA_TYPE)
+        .await
+        .map(Value::Object);
 
     let mut join = Map::new();
     let mut invite = Map::new();
@@ -230,6 +236,12 @@ pub async fn sync(
                 }).and_then(|e| e.get("sender").and_then(Value::as_str));
                 if let Some(inviter) = inviter {
                     if ignored_users.contains(inviter) || ignored_invite_senders.contains(inviter) {
+                        continue;
+                    }
+                    // MSC4155: drop invites from blocked/ignored users per the config.
+                    if crate::invite_filter::get_invite_rule(invite_config.as_ref(), inviter)
+                        != crate::invite_filter::InviteRule::Allow
+                    {
                         continue;
                     }
                 }
