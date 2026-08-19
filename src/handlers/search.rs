@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 use crate::errors::{bad_json, MatrixResult};
 use crate::events::pdu_to_client_event;
 use crate::server::{AppState, AuthCtx};
+use crate::storage::Direction;
 use crate::types::identifiers::RoomId;
 
 /// `POST /_matrix/client/v3/search`.
@@ -44,6 +45,10 @@ pub async fn search(
         .and_then(Value::as_u64)
         .unwrap_or(10) as usize;
     let from = query.get("next_batch").map(String::as_str);
+    // MSC-era event_context: include events around each result (TestSearch).
+    let event_context = room_events.and_then(|r| r.get("event_context"));
+    let before_limit = event_context.and_then(|c| c.get("before_limit")).and_then(Value::as_u64).unwrap_or(5) as usize;
+    let after_limit = event_context.and_then(|c| c.get("after_limit")).and_then(Value::as_u64).unwrap_or(5) as usize;
 
     // Restrict to the searcher's joined rooms (optionally filtered).
     let mut room_ids: Vec<RoomId> = st.storage.get_rooms_for_user(&auth.user_id).await;
@@ -69,10 +74,19 @@ pub async fn search(
             continue;
         }
         let rank = if order_by == "rank" { 1.0 } else { er.stream_pos as f64 };
-        results.push(json!({
+        let mut entry = json!({
             "rank": rank,
             "result": pdu_to_client_event(&er.event, er.event_id.as_str()),
-        }));
+        });
+        if event_context.is_some() {
+            let room = RoomId::from(er.event.get("room_id").and_then(Value::as_str).unwrap_or(""));
+            let before = st.storage.get_events_by_room(&room, before_limit, Some(er.stream_pos), Direction::Backward).await;
+            let after = st.storage.get_events_by_room(&room, after_limit, Some(er.stream_pos), Direction::Forward).await;
+            let ev_before: Vec<Value> = before.events.iter().map(|e| serde_json::to_value(pdu_to_client_event(&e.event, e.event_id.as_str())).unwrap_or(Value::Null)).collect();
+            let ev_after: Vec<Value> = after.events.iter().map(|e| serde_json::to_value(pdu_to_client_event(&e.event, e.event_id.as_str())).unwrap_or(Value::Null)).collect();
+            entry["context"] = json!({ "events_before": ev_before, "events_after": ev_after });
+        }
+        results.push(entry);
     }
 
     // Omit next_batch entirely on the last page (a present-but-null token would
