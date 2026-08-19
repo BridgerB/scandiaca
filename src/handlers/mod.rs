@@ -37,6 +37,7 @@ pub mod search;
 pub mod sliding_sync;
 pub mod spaces;
 pub mod sync;
+pub mod thread_subscriptions;
 pub mod user_directory;
 
 use serde_json::Value;

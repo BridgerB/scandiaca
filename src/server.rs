@@ -802,6 +802,12 @@ pub fn build_router(state: AppState) -> Router {
             "/_matrix/client/v3/user_directory/search",
             post(handlers::user_directory::search),
         )
+        .route(
+            "/_matrix/client/unstable/io.element.msc4306/rooms/{roomId}/thread/{threadRootId}/subscription",
+            get(handlers::thread_subscriptions::get_thread_subscription)
+                .put(handlers::thread_subscriptions::put_thread_subscription)
+                .delete(handlers::thread_subscriptions::delete_thread_subscription),
+        )
         .route("/_matrix/client/v3/sync", get(handlers::sync::sync))
         .fallback(unrecognized)
         // A known path hit with an unsupported method must still return the JSON
