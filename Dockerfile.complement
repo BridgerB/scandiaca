@@ -10,10 +10,26 @@
 FROM rust:1.88-slim AS builder
 RUN apt-get update && apt-get install -y pkg-config && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
+# Cap build parallelism so a from-scratch release build fits in constrained
+# memory (concurrent rustc invocations are the peak-RSS driver; unbounded jobs
+# OOM on a loaded host).
+ENV CARGO_BUILD_JOBS=2
+# Pre-build dependencies against stub sources in their own cached layer, so a
+# source-only change recompiles just the scandiaca crate (~1 unit) instead of
+# every dependency (~hundreds) — keeping iteration fast and peak memory low.
 COPY Cargo.toml Cargo.lock ./
+RUN mkdir -p src \
+    && echo '' > src/lib.rs \
+    && echo 'fn main() {}' > src/main.rs \
+    && cargo build --release --bin scandiaca \
+    && rm -rf src
 COPY src/ ./src/
 COPY tests/ ./tests/
-RUN cargo build --release --bin scandiaca
+# Docker COPY preserves the host files' mtimes, which can be older than the stub
+# layer's build artifacts — cargo would then skip recompiling and ship the stub
+# binary. Bump the sources so cargo rebuilds the scandiaca crate for real.
+RUN find src tests -type f -exec touch {} + \
+    && cargo build --release --bin scandiaca
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y curl openssl ca-certificates && rm -rf /var/lib/apt/lists/*

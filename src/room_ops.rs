@@ -13,11 +13,11 @@ use crate::canonical_json::canonical_json;
 use crate::errors::{not_joined, room_not_found, MatrixError};
 use crate::events::{
     build_event, check_event_auth, compute_event_id, ev_sender, get_membership, make_state_key,
-    select_auth_events, BuildEventParams,
+    membership_of, select_auth_events, BuildEventParams,
 };
 use crate::signing::SigningKey;
 use crate::storage::Storage;
-use crate::types::identifiers::{EventId, RoomId, UserId};
+use crate::types::identifiers::{EventId, RoomId, ServerName, UserId};
 use crate::types::internal::RoomState;
 
 /// Running context for building a chain of events into a room.
@@ -147,6 +147,13 @@ pub async fn send_membership_event(
         content.insert("reason".to_string(), Value::String(r.to_string()));
     }
 
+    // Compute the fanout destinations from the CURRENT state, before the change
+    // is stored: a kick/ban/leave flips the target's membership away from
+    // join/invite, after which get_servers_in_room no longer counts the target's
+    // server, so it must be captured up front (TestFederationRoomsInvite rescind).
+    let membership_destinations =
+        collect_membership_destinations(&room, server_name, target_user_id, sender);
+
     // `room.depth` is already the next depth to use (send_state_event stores
     // post-increment), and forward_extremities are the prev_events.
     let mut ctx = EventContext {
@@ -175,11 +182,75 @@ pub async fn send_membership_event(
     let eid = EventId::from(event_id.as_str());
     if let Some(stored) = storage.get_event(&eid).await {
         if let Some(fed) = fed {
-            crate::federation::outbound::fanout_event(storage, fed, server_name, room_id, &stored.event).await;
+            crate::federation::outbound::deliver_event_to_servers(
+                fed,
+                server_name,
+                &stored.event,
+                &membership_destinations,
+            )
+            .await;
         }
         crate::appservice::push::push_to_appservices(&stored.event, event_id.as_str(), registrations);
     }
     Ok(event_id)
+}
+
+/// Remote servers to notify of a membership change for `target_user_id`, computed
+/// from the current room state (before the change is stored). Union of every
+/// remote server resident in the room (join/invite/knock) and the target's own
+/// server. The target's server is dropped when the target is merely *invited*,
+/// the `sender` is not the target's inviter, and no other member keeps that
+/// server in the room — so a third party rescinding someone else's out-of-band
+/// invite does not reach the invitee's otherwise-non-resident server
+/// (TestFederationRoomsInvite "Non-invitee user cannot rescind…"). Our own
+/// server is always excluded. Mirrors strix `collectMembershipDestinations`.
+fn collect_membership_destinations(
+    room: &RoomState,
+    server_name: &str,
+    target_user_id: &str,
+    sender: &str,
+) -> Vec<ServerName> {
+    let prefix = "m.room.member\u{1f}";
+    let target_server = crate::ids::domain_of(target_user_id);
+
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut destinations: Vec<ServerName> = Vec::new();
+    let mut target_membership: Option<&str> = None;
+    let mut target_inviter: Option<&str> = None;
+    let mut other_member_on_target_server = false;
+
+    for (key, event) in &room.state_events {
+        let Some(member_id) = key.strip_prefix(prefix) else { continue };
+        let m = membership_of(event);
+        let resident = matches!(m, Some("join") | Some("invite") | Some("knock"));
+        if resident {
+            let srv = crate::ids::domain_of(member_id);
+            if srv != server_name && seen.insert(srv.to_string()) {
+                destinations.push(srv.into());
+            }
+        }
+        if member_id == target_user_id {
+            target_membership = m;
+            target_inviter = event.get("sender").and_then(Value::as_str);
+        } else if resident && crate::ids::domain_of(member_id) == target_server {
+            other_member_on_target_server = true;
+        }
+    }
+
+    if target_server != server_name {
+        let invite_only = target_membership == Some("invite");
+        let drop = invite_only && target_inviter != Some(sender) && !other_member_on_target_server;
+        if drop {
+            // A third party rescinding someone else's out-of-band invite must not
+            // reach the invitee's server — remove it even though the still-pending
+            // invite made it "resident" in the loop above.
+            destinations.retain(|s| s.as_str() != target_server);
+        } else if seen.insert(target_server.to_string()) {
+            destinations.push(target_server.into());
+        }
+    }
+
+    destinations
 }
 
 /// MSC3083: does `user_id` satisfy a restricted room's `allow` list, i.e. is

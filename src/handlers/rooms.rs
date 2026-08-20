@@ -300,7 +300,10 @@ pub async fn create_room(
         .await?;
     }
 
-    // Local invites only (federated invite arrives with the federation phase).
+    // Invite the initial members. Local invitees are added as state events;
+    // remote invitees go over federation (PUT /v2/invite) so their server learns
+    // of and co-signs the invite — otherwise it never reaches their /sync
+    // (TestFederationRoomsInvite). Mirrors strix `postCreateRoom`.
     if let Some(invites) = body.get("invite").and_then(Value::as_array) {
         let is_direct = body
             .get("is_direct")
@@ -308,22 +311,47 @@ pub async fn create_room(
             .unwrap_or(false);
         for inv in invites {
             if let Some(invitee) = inv.as_str() {
-                let mut content = json!({ "membership": "invite" });
-                if is_direct {
-                    content["is_direct"] = json!(true);
+                let invitee_server =
+                    if invitee.contains(':') { crate::ids::domain_of(invitee) } else { sn };
+                if st.federation_client.is_some() && invitee_server != sn {
+                    // Remote invitee: perform_outbound_invite reads the room's current
+                    // depth/forward_extremities from storage (kept in sync by
+                    // send_state_event) and advances them; re-sync ctx afterward so a
+                    // following canonical_alias event chains from the invite.
+                    crate::handlers::federation::membership::perform_outbound_invite(
+                        &st,
+                        room_id.as_str(),
+                        user_id,
+                        invitee,
+                        None,
+                        is_direct,
+                    )
+                    .await?;
+                    if let Some(room) = st.storage.get_room(&room_id).await {
+                        ctx.depth = room.depth;
+                        ctx.prev_events =
+                            room.forward_extremities.iter().map(|e| e.as_str().to_string()).collect();
+                        ctx.room_state.depth = room.depth;
+                        ctx.room_state.forward_extremities = room.forward_extremities.clone();
+                    }
+                } else {
+                    let mut content = json!({ "membership": "invite" });
+                    if is_direct {
+                        content["is_direct"] = json!(true);
+                    }
+                    send_state_event(
+                        storage,
+                        sn,
+                        &mut ctx,
+                        user_id,
+                        "m.room.member",
+                        invitee,
+                        content,
+                        key,
+                        None,
+                    )
+                    .await?;
                 }
-                send_state_event(
-                    storage,
-                    sn,
-                    &mut ctx,
-                    user_id,
-                    "m.room.member",
-                    invitee,
-                    content,
-                    key,
-                    None,
-                )
-                .await?;
             }
         }
     }

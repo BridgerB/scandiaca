@@ -253,6 +253,25 @@ pub async fn backfill_missing_history(
     imported
 }
 
+/// Deliver an already-signed event to an explicit destination set. Unlike
+/// [`fanout_event`], the caller supplies the servers, so the set can include one
+/// that the membership change has just removed from the room (e.g. a kicked
+/// user's server). Fire-and-forget; never throws.
+pub async fn deliver_event_to_servers(
+    client: &FederationClient,
+    origin: &str,
+    event: &Value,
+    destinations: &[crate::types::identifiers::ServerName],
+) {
+    for dest in destinations {
+        let dest = dest.as_str();
+        if dest.is_empty() || dest == origin {
+            continue;
+        }
+        let _ = send_transaction(client, origin, dest, vec![event.clone()], vec![]).await;
+    }
+}
+
 /// Deliver an EDU to every remote server resident in a room (typing/receipts).
 pub async fn fanout_edu_to_room(
     storage: &dyn Storage,
