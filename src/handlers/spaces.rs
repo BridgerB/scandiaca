@@ -120,11 +120,18 @@ fn children(room: &RoomState) -> Vec<(String, Value)> {
     out
 }
 
-/// A local room is visible to the user if public/knockable, world-readable, or
-/// they are a member (join/invite).
-fn accessible(room: &RoomState, user_id: &str) -> bool {
+/// A local room is visible to the user if public/knockable, world-readable, a
+/// restricted room whose `allow` rule the user satisfies, or they are a member.
+async fn accessible(storage: &dyn crate::storage::Storage, room: &RoomState, user_id: &str) -> bool {
     match state_content(room, "m.room.join_rules\u{1f}", "join_rule") {
         Some("public") | Some("knock") | Some("knock_restricted") => return true,
+        // MSC3083: a restricted room is visible in the hierarchy if the user can
+        // join it via the allow rule (TestRestrictedRoomsSpacesSummaryLocal).
+        Some("restricted") => {
+            if crate::room_ops::user_satisfies_restricted_allow(storage, room, user_id, None).await {
+                return true;
+            }
+        }
         _ => {}
     }
     if state_content(room, "m.room.history_visibility\u{1f}", "history_visibility") == Some("world_readable") {
@@ -168,7 +175,7 @@ pub async fn get_hierarchy(
         let Some(room) = st.storage.get_room(&room_id.as_str().into()).await else {
             continue;
         };
-        if room_id != root && !accessible(&room, auth.user_id.as_str()) {
+        if room_id != root && !accessible(&*st.storage, &room, auth.user_id.as_str()).await {
             continue;
         }
         // Only spaces contribute children to the hierarchy; a non-space room is a
