@@ -375,7 +375,10 @@ pub async fn sync(
         for u in &newly_shared {
             out.insert(u.clone());
         }
-        out.retain(|u| u != auth.user_id.as_str());
+        // Self is intentionally NOT excluded: a client must learn of its own other
+        // devices (e.g. a second login, or newly sharing an encrypted room), so
+        // self is reported when self's keys changed or self newly joined a shared
+        // room (TestDeviceListsUpdateOverFederation). Mirrors strix.
         out.into_iter().collect()
     };
 
