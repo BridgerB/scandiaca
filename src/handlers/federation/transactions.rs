@@ -162,10 +162,11 @@ async fn process_edu(st: &AppState, edu: &Value) {
                         let Some(users) = users.as_object() else { continue };
                         for (user_id, data) in users {
                             let ts = data.get("data").and_then(|d| d.get("ts")).and_then(Value::as_i64).unwrap_or(0);
+                            let thread_id = data.get("data").and_then(|d| d.get("thread_id")).and_then(Value::as_str);
                             if let Some(eids) = data.get("event_ids").and_then(Value::as_array) {
                                 for eid in eids.iter().filter_map(Value::as_str) {
                                     st.storage
-                                        .set_receipt(&RoomId::from(room_id.as_str()), &UserId::from(user_id.as_str()), &EventId::from(eid), rtype, ts, None)
+                                        .set_receipt(&RoomId::from(room_id.as_str()), &UserId::from(user_id.as_str()), &EventId::from(eid), rtype, ts, thread_id)
                                         .await;
                                 }
                             }

@@ -51,16 +51,36 @@ pub async fn post_receipt(
     let rid = RoomId::from(room_id.as_str());
     require_joined_room(&*st.storage, &rid, auth.user_id.as_str()).await?;
     let thread_id = body.get("thread_id").and_then(Value::as_str);
+    let ts = now_ms();
     st.storage
-        .set_receipt(
-            &rid,
-            &auth.user_id,
-            &EventId::from(event_id.as_str()),
-            &receipt_type,
-            now_ms(),
-            thread_id,
-        )
+        .set_receipt(&rid, &auth.user_id, &EventId::from(event_id.as_str()), &receipt_type, ts, thread_id)
         .await;
+
+    // Fan out PUBLIC receipts (not m.read.private) to remote servers in the room
+    // as an m.receipt EDU (TestThreadReceiptsInSyncMSC4102 federation half).
+    if receipt_type != "m.read.private" {
+        if let Some(fed) = &st.federation_client {
+            let mut data = Map::new();
+            data.insert("ts".to_string(), json!(ts));
+            if let Some(tid) = thread_id {
+                data.insert("thread_id".to_string(), json!(tid));
+            }
+            let mut by_user = Map::new();
+            by_user.insert(auth.user_id.as_str().to_string(), json!({ "data": data, "event_ids": [event_id] }));
+            let mut by_type = Map::new();
+            by_type.insert(receipt_type.clone(), Value::Object(by_user));
+            let mut by_room = Map::new();
+            by_room.insert(room_id.clone(), Value::Object(by_type));
+            crate::federation::outbound::fanout_edu_to_room(
+                &*st.storage,
+                fed,
+                &st.server_name,
+                &rid,
+                json!({ "edu_type": "m.receipt", "content": Value::Object(by_room) }),
+            )
+            .await;
+        }
+    }
     Ok(Json(json!({})))
 }
 
