@@ -19,7 +19,7 @@ use crate::federation::verify::verify_origin_signature;
 use crate::middleware::federation_auth::{FedAuth, FedAuthBody};
 use crate::server::{now_ms, AppState};
 use crate::signing::sign_event;
-use crate::types::identifiers::{EventId, RoomId, UserId};
+use crate::types::identifiers::{EventId, RoomId, ServerName, UserId};
 
 /// Outbound federated join: for a local user joining a room we don't hold, try
 /// each candidate resident server — GET make_join → fill+sign the template →
@@ -129,6 +129,33 @@ pub async fn perform_federation_join(
 /// Public wrapper for path-segment encoding, used by the client join handler.
 pub fn urlencode_public(s: &str) -> String {
     urlencode(s)
+}
+
+/// As the room's resident/hosting server, forward a membership `event` to every
+/// other resident server (excluding ourselves and any server in `exclude`, which
+/// already holds it — the invitee it was PUT to, or the origin that sent it).
+/// Without this, a third participating server never learns of an invite/leave it
+/// did not directly transact (TestFederationRejectInvite). Fire-and-forget.
+async fn fanout_membership_to_residents(st: &AppState, rid: &RoomId, event: &Value, exclude: &[&str]) {
+    let Some(fed) = st.federation_client.clone() else { return };
+    let dests: Vec<ServerName> = st
+        .storage
+        .get_servers_in_room(rid)
+        .await
+        .into_iter()
+        .filter(|s| {
+            let s = s.as_str();
+            !s.is_empty() && s != st.server_name.as_ref() && !exclude.contains(&s)
+        })
+        .collect();
+    if !dests.is_empty() {
+        crate::federation::outbound::deliver_event_to_servers(
+            fed,
+            st.server_name.to_string(),
+            event.clone(),
+            dests,
+        );
+    }
 }
 
 fn urlencode(s: &str) -> String {
@@ -516,8 +543,12 @@ pub async fn perform_outbound_invite(
     }
     let stored = resp.body.get("event").cloned().unwrap_or(event);
     let eid = EventId::from(event_id.as_str());
-    st.storage.set_state_event(&rid, stored, &eid).await;
+    st.storage.set_state_event(&rid, stored.clone(), &eid).await;
     st.storage.update_room_dag(&rid, room.depth + 1, vec![eid]).await;
+    // Forward the invite to the room's other resident servers (the invitee already
+    // received it via the PUT above) so they observe the new member
+    // (TestFederationRejectInvite).
+    fanout_membership_to_residents(st, &rid, &stored, &[invitee_server.as_str()]).await;
     Ok(())
 }
 
@@ -585,7 +616,7 @@ async fn send_leave_impl(
     check_event_auth(&event, &room)?;
     let co_signed = sign_event(&event, &st.server_name, &st.signing_key, Some(&room.room_version));
     let eid = EventId::from(event_id.as_str());
-    st.storage.set_state_event(&RoomId::from(room_id.as_str()), co_signed, &eid).await;
+    st.storage.set_state_event(&RoomId::from(room_id.as_str()), co_signed.clone(), &eid).await;
     st.storage
         .update_room_dag(
             &RoomId::from(room_id.as_str()),
@@ -593,6 +624,9 @@ async fn send_leave_impl(
             vec![eid],
         )
         .await;
+    // Forward the departure to the room's other resident servers (the origin that
+    // sent it already has it) so they observe it (TestFederationRejectInvite).
+    fanout_membership_to_residents(&st, &RoomId::from(room_id.as_str()), &co_signed, &[auth.origin.as_str()]).await;
     if v1 {
         Ok(Json(json!([200, {}])).into_response())
     } else {
