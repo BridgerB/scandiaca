@@ -72,6 +72,25 @@ pub async fn download(
     serve_media(&st, &server_name, &media_id, file_name, true).await
 }
 
+/// `GET /_matrix/client/v1/media/download/...` — authenticated media (401 without
+/// a token, TestContentCSAPIMediaV1). Delegates to `download` once authorized.
+pub async fn download_authed(
+    st: State<AppState>,
+    _auth: AuthCtx,
+    params: Path<Vec<String>>,
+) -> Response {
+    download(st, params).await
+}
+
+/// `GET /_matrix/client/v1/media/thumbnail/...` — authenticated thumbnail.
+pub async fn thumbnail_authed(
+    st: State<AppState>,
+    _auth: AuthCtx,
+    params: Path<Vec<String>>,
+) -> Response {
+    thumbnail(st, params).await
+}
+
 /// `GET /_matrix/media/v3/thumbnail/{serverName}/{mediaId}` — serves the
 /// original (no server-side resizing).
 pub async fn thumbnail(State(st): State<AppState>, Path(params): Path<Vec<String>>) -> Response {

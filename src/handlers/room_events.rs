@@ -338,29 +338,34 @@ pub async fn get_timestamp_to_event(
     };
 
     let all = st.storage.get_events_by_room_since(&rid, 0, 1_000_000).await;
-    let mut best: Option<(String, i64)> = None;
+    // Break origin_server_ts ties topologically: dir=f wants the earliest event
+    // at/after ts (min ts, then min depth, then min stream); dir=b the latest
+    // at/before ts (max ts, then max depth, then max stream). TestJumpToDateEndpoint
+    // "when all message timestamps are the same".
+    let mut best: Option<(String, i64, i64, i64)> = None; // (event_id, ts, depth, stream)
     for e in &all.events {
         let ets = e.event.get("origin_server_ts").and_then(Value::as_i64).unwrap_or(0);
-        let candidate = if forward { ets >= ts } else { ets <= ts };
-        if !candidate {
+        if if forward { ets < ts } else { ets > ts } {
             continue;
         }
+        let depth = event_depth(&e.event);
+        let key = (ets, depth, e.stream_pos);
         let better = match &best {
             None => true,
-            Some((_, bts)) => {
+            Some((_, bts, bd, bs)) => {
                 if forward {
-                    ets < *bts
+                    key < (*bts, *bd, *bs)
                 } else {
-                    ets > *bts
+                    key > (*bts, *bd, *bs)
                 }
             }
         };
         if better {
-            best = Some((e.event_id.as_str().to_string(), ets));
+            best = Some((e.event_id.as_str().to_string(), ets, depth, e.stream_pos));
         }
     }
     match best {
-        Some((event_id, ets)) => Ok(Json(json!({ "event_id": event_id, "origin_server_ts": ets }))),
+        Some((event_id, ets, _, _)) => Ok(Json(json!({ "event_id": event_id, "origin_server_ts": ets }))),
         None => Err(not_found("Unable to find event from timestamp in direction")),
     }
 }

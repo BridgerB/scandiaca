@@ -770,15 +770,15 @@ pub fn build_router(state: AppState) -> Router {
         .route("/_matrix/media/v3/config", get(handlers::media::config))
         .route(
             "/_matrix/client/v1/media/download/{serverName}/{mediaId}",
-            get(handlers::media::download),
+            get(handlers::media::download_authed),
         )
         .route(
             "/_matrix/client/v1/media/download/{serverName}/{mediaId}/{fileName}",
-            get(handlers::media::download),
+            get(handlers::media::download_authed),
         )
         .route(
             "/_matrix/client/v1/media/thumbnail/{serverName}/{mediaId}",
-            get(handlers::media::thumbnail),
+            get(handlers::media::thumbnail_authed),
         )
         .route("/_matrix/client/v1/media/config", get(handlers::media::config))
         .route(
