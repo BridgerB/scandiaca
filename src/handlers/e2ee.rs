@@ -12,7 +12,7 @@ use crate::errors::{bad_json, MatrixResult};
 use crate::ids::domain_of;
 use crate::server::{AppState, AuthCtx};
 use crate::types::e2ee::DeviceKeys;
-use crate::types::identifiers::{DeviceId, KeyId, UserId};
+use crate::types::identifiers::{DeviceId, KeyId, RoomId, UserId};
 
 /// Process-local monotonic device-list stream counter (strix
 /// `deviceListStreamCounter`), stamped into outbound `m.device_list_update`.
@@ -66,6 +66,51 @@ pub async fn send_device_list_update(st: &AppState, user_id: &UserId, device_id:
     let edu = json!({ "edu_type": "m.device_list_update", "content": content });
     for dest in dests {
         crate::federation::outbound::deliver_edu_to_destination(&*st.storage, fed, &st.server_name, &dest, edu.clone()).await;
+    }
+}
+
+/// After a LOCAL user joins `room_id`, announce their device list to the room's
+/// resident remote servers via one `m.device_list_update` EDU per device — so a
+/// server that did not previously share a room with the user learns their devices
+/// (TestDeviceListsUpdateOverFederationOnRoomJoin). Mirrors strix
+/// `notifyDeviceListUpdateOnJoin`. Fire-and-forget.
+pub async fn notify_device_list_update_on_join(st: &AppState, room_id: &RoomId, user_id: &UserId) {
+    let Some(fed) = &st.federation_client else { return };
+    // Only the joining user's own server announces that user's devices.
+    if domain_of(user_id.as_str()) != st.server_name.as_ref() {
+        return;
+    }
+    let dests: Vec<String> = st
+        .storage
+        .get_servers_in_room(room_id)
+        .await
+        .into_iter()
+        .map(|s| s.as_str().to_string())
+        .filter(|s| !s.is_empty() && s != st.server_name.as_ref())
+        .collect();
+    if dests.is_empty() {
+        return;
+    }
+    for device in st.storage.get_all_devices(user_id).await {
+        let device_id = device.device_id;
+        let stream_id = DEVICE_LIST_STREAM.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        let mut content = json!({
+            "user_id": user_id.as_str(),
+            "device_id": device_id.as_str(),
+            "stream_id": stream_id,
+            "prev_id": [],
+            "deleted": false,
+        });
+        if let Some(name) = device.display_name {
+            content["device_display_name"] = json!(name);
+        }
+        if let Some(keys) = st.storage.get_device_keys(user_id, &device_id).await {
+            content["keys"] = serde_json::to_value(keys).unwrap_or(Value::Null);
+        }
+        let edu = json!({ "edu_type": "m.device_list_update", "content": content });
+        for dest in &dests {
+            crate::federation::outbound::deliver_edu_to_destination(&*st.storage, fed, &st.server_name, dest, edu.clone()).await;
+        }
     }
 }
 
