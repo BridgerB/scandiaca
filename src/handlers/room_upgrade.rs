@@ -72,6 +72,26 @@ pub async fn migrate_room_push_rules(
     }
 }
 
+/// When a local user joins a room that replaces an earlier one (its create event
+/// names a `predecessor`), copy their room-scoped push rule from the predecessor
+/// (strix `copyPredecessorPushRulesOnJoin`). TestPushRuleRoomUpgrade remote-join.
+pub async fn copy_predecessor_push_rules_on_join(storage: &dyn Storage, user_id: &str, new_room_id: &str) {
+    let create = storage.get_state_event(&RoomId::from(new_room_id), "m.room.create", "").await;
+    let old_room_id = create.and_then(|e| {
+        e.event
+            .get("content")
+            .and_then(|c| c.get("predecessor"))
+            .and_then(|p| p.get("room_id"))
+            .and_then(Value::as_str)
+            .map(String::from)
+    });
+    if let Some(old) = old_room_id {
+        if old != new_room_id {
+            copy_room_push_rule(storage, user_id, &old, new_room_id).await;
+        }
+    }
+}
+
 /// State event types copied from the old room to the replacement.
 const COPIED_STATE: &[&str] = &[
     "m.room.power_levels",

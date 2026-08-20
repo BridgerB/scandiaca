@@ -94,6 +94,7 @@ pub async fn join(
         )
         .await?;
         clear_forgotten(&st, &auth.user_id, &rid).await;
+        crate::handlers::room_upgrade::copy_predecessor_push_rules_on_join(&*st.storage, user_id, &room_id).await;
         return Ok(Json(json!({ "room_id": room_id })));
     };
     if get_membership(&room, user_id) == Some("ban") {
@@ -146,6 +147,7 @@ pub async fn join(
 
     // Re-joining clears any forgotten marker.
     clear_forgotten(&st, &auth.user_id, &rid).await;
+    crate::handlers::room_upgrade::copy_predecessor_push_rules_on_join(&*st.storage, user_id, &room_id).await;
 
     Ok(Json(json!({ "room_id": room_id })))
 }
