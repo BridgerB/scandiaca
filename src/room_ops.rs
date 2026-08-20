@@ -127,7 +127,7 @@ pub async fn send_membership_event(
     storage: &dyn Storage,
     server_name: &str,
     signing_key: Option<&SigningKey>,
-    fed: Option<&crate::federation::FederationClient>,
+    fed: Option<std::sync::Arc<crate::federation::FederationClient>>,
     registrations: &[crate::types::appservice::AppserviceRegistration],
     room_id: &RoomId,
     sender: &str,
@@ -184,11 +184,10 @@ pub async fn send_membership_event(
         if let Some(fed) = fed {
             crate::federation::outbound::deliver_event_to_servers(
                 fed,
-                server_name,
-                &stored.event,
-                &membership_destinations,
-            )
-            .await;
+                server_name.to_string(),
+                stored.event.clone(),
+                membership_destinations,
+            );
         }
         crate::appservice::push::push_to_appservices(&stored.event, event_id.as_str(), registrations);
     }

@@ -256,20 +256,28 @@ pub async fn backfill_missing_history(
 /// Deliver an already-signed event to an explicit destination set. Unlike
 /// [`fanout_event`], the caller supplies the servers, so the set can include one
 /// that the membership change has just removed from the room (e.g. a kicked
-/// user's server). Fire-and-forget; never throws.
-pub async fn deliver_event_to_servers(
-    client: &FederationClient,
-    origin: &str,
-    event: &Value,
-    destinations: &[crate::types::identifiers::ServerName],
+/// user's server).
+///
+/// Fire-and-forget: the delivery runs in a detached task so the client request
+/// that triggered it returns *before* the change propagates. This matters for
+/// membership — an observer's next /sync must be able to see the pre-change state
+/// and then catch the transition incrementally (TestUnbanViaInvite,
+/// TestFederationRejectInvite). Mirrors strix's un-awaited `deliverEventToServers`.
+pub fn deliver_event_to_servers(
+    client: std::sync::Arc<FederationClient>,
+    origin: String,
+    event: Value,
+    destinations: Vec<crate::types::identifiers::ServerName>,
 ) {
-    for dest in destinations {
-        let dest = dest.as_str();
-        if dest.is_empty() || dest == origin {
-            continue;
+    tokio::spawn(async move {
+        for dest in &destinations {
+            let dest = dest.as_str();
+            if dest.is_empty() || dest == origin {
+                continue;
+            }
+            let _ = send_transaction(&client, &origin, dest, vec![event.clone()], vec![]).await;
         }
-        let _ = send_transaction(client, origin, dest, vec![event.clone()], vec![]).await;
-    }
+    });
 }
 
 /// Deliver an EDU to every remote server resident in a room (typing/receipts).
