@@ -236,6 +236,13 @@ pub async fn put_state_event(
         prev_events: room.forward_extremities.iter().map(|e| e.as_str().to_string()).collect(),
         room_state: room,
     };
+    // Manual room upgrade: a tombstone naming a replacement_room migrates local
+    // users' room-scoped push rules (TestPushRuleRoomUpgrade "manually upgrading").
+    let replacement_room = if event_type == "m.room.tombstone" {
+        content.get("replacement_room").and_then(Value::as_str).map(String::from)
+    } else {
+        None
+    };
     let event_id = send_state_event(
         &*st.storage,
         &st.server_name,
@@ -256,6 +263,12 @@ pub async fn put_state_event(
             crate::federation::outbound::fanout_event(&*st.storage, fed, &st.server_name, &rid, &stored.event).await;
         }
         crate::appservice::push::push_to_appservices(&stored.event, event_id.as_str(), &st.registrations);
+    }
+    if let Some(replacement) = replacement_room {
+        crate::handlers::room_upgrade::migrate_room_push_rules(
+            &*st.storage, &st.server_name, &ctx.room_state, &room_id, &replacement,
+        )
+        .await;
     }
     Ok(Json(json!({ "event_id": event_id })))
 }

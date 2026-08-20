@@ -17,8 +17,60 @@ use crate::events::{
 use crate::extract::OptionalJson;
 use crate::room_ops::{require_joined_room, send_state_event, EventContext};
 use crate::server::{now_ms, AppState, AuthCtx};
-use crate::types::identifiers::{EventId, RoomId};
+use crate::storage::Storage;
+use crate::types::identifiers::{EventId, RoomId, UserId};
 use crate::types::internal::RoomState;
+
+/// Copy a user's room-scoped push rule from `old_room_id` to `new_room_id` in
+/// their `m.push_rules` global account data (strix `copyRoomPushRule`). Idempotent.
+async fn copy_room_push_rule(storage: &dyn Storage, user_id: &str, old_room_id: &str, new_room_id: &str) {
+    let Some(raw) = storage.get_global_account_data(&UserId::from(user_id), "m.push_rules").await else {
+        return;
+    };
+    let mut pr = Value::Object(raw);
+    let Some(room_rules) = pr.get("global").and_then(|g| g.get("room")).and_then(Value::as_array) else {
+        return;
+    };
+    let Some(existing) = room_rules.iter().find(|r| r.get("rule_id").and_then(Value::as_str) == Some(old_room_id)).cloned() else {
+        return;
+    };
+    if room_rules.iter().any(|r| r.get("rule_id").and_then(Value::as_str) == Some(new_room_id)) {
+        return;
+    }
+    let mut copied = existing;
+    copied["rule_id"] = json!(new_room_id);
+    if let Some(arr) = pr.get_mut("global").and_then(|g| g.get_mut("room")).and_then(Value::as_array_mut) {
+        arr.push(copied);
+    }
+    if let Some(obj) = pr.as_object() {
+        storage.set_global_account_data(&UserId::from(user_id), "m.push_rules", obj.clone()).await;
+    }
+}
+
+/// Migrate room-scoped push rules from `old_room` to `new_room_id` for every
+/// LOCAL joined member (strix `migrateRoomPushRules`). Shared by POST /upgrade and
+/// the manual-upgrade tombstone path. TestPushRuleRoomUpgrade.
+pub async fn migrate_room_push_rules(
+    storage: &dyn Storage,
+    server_name: &str,
+    old_room: &RoomState,
+    old_room_id: &str,
+    new_room_id: &str,
+) {
+    let suffix = format!(":{server_name}");
+    let members: Vec<String> = old_room
+        .state_events
+        .iter()
+        .filter_map(|(k, ev)| {
+            let uid = k.strip_prefix("m.room.member\u{1f}")?;
+            let m = ev.get("content").and_then(|c| c.get("membership")).and_then(Value::as_str)?;
+            (m == "join" && uid.ends_with(&suffix)).then(|| uid.to_string())
+        })
+        .collect();
+    for uid in members {
+        copy_room_push_rule(storage, &uid, old_room_id, new_room_id).await;
+    }
+}
 
 /// State event types copied from the old room to the replacement.
 const COPIED_STATE: &[&str] = &[
@@ -191,5 +243,6 @@ pub async fn upgrade(
     storage.set_state_event(&old_rid, tombstone, &tid).await;
     storage.update_room_dag(&old_rid, old_room.depth + 1, vec![tid]).await;
 
+    migrate_room_push_rules(&*st.storage, sn, &old_room, old_room_id.as_str(), new_room_id.as_str()).await;
     Ok(Json(json!({ "replacement_room": new_room_id.as_str() })))
 }
