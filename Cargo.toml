@@ -1,0 +1,60 @@
+[package]
+name = "scandiaca"
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.85"
+description = "Matrix homeserver in Rust — a port of strix"
+license = "Unlicense"
+
+[lib]
+name = "scandiaca"
+path = "src/lib.rs"
+
+[[bin]]
+name = "scandiaca"
+path = "src/main.rs"
+
+[dependencies]
+# JSON. Default Map is BTreeMap (sorted); canonical_json re-sorts by UTF-16 to
+# match JS Object.keys().sort(), so byte-parity does not depend on map ordering.
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+# Persistent (structurally-shared) collections. The SQLite backend snapshots by
+# cloning the whole in-memory state; with `im`, cloning the large event/timeline
+# maps is O(1) (pointer bump) instead of O(n), so the background writer never
+# stalls message sends with an O(n) clone — flat tail latency at scale.
+im = { version = "15", features = ["serde"] }
+
+# Ed25519 over raw 32-byte keys — equivalent to strix's node:crypto DER dance.
+ed25519-dalek = "2"
+sha2 = "0.10"
+# TURN credential HMAC (coturn use-auth-secret).
+sha1 = "0.10"
+hmac = "0.12"
+base64 = "0.22"
+getrandom = "0.2"
+# Password hashing (strix uses node:crypto scrypt with the same params).
+scrypt = { version = "0.11", default-features = false }
+
+# Glob → regex matching for push rules / server ACLs (strix builds JS RegExp).
+regex = "1"
+
+# Async storage trait used as `Arc<dyn Storage>` (dyn-compatible async methods).
+async-trait = "0.1"
+# Async runtime + HTTP server.
+tokio = { version = "1", features = ["full"] }
+axum = "0.8"
+# TLS federation listener (port 8448) for real federation / Complement.
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+rustls = "0.23"
+
+# SQLite backend (bundled: no system libsqlite3 dependency).
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Outbound federation HTTP client (rustls; accepts self-signed certs in dev).
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+[dev-dependencies]
+serde_json = "1"
+base64 = "0.22"
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }

@@ -1,0 +1,1161 @@
+{
+  "_meta": {
+    "description": "Byte-exact federation test vectors generated from strix TypeScript source.",
+    "generator": "scandiaca/tests/fixtures/gen-phase1.mjs (imports strix src directly)",
+    "serverName": "test.localhost",
+    "keyId": "ed25519:test",
+    "seedHex": "0101010101010101010101010101010101010101010101010101010101010101",
+    "strixSrc": "/Users/bridger/Developer/matrix/upstream/strix/src"
+  },
+  "canonicalJson": [
+    {
+      "input": {
+        "b": 1,
+        "a": 2,
+        "c": {
+          "z": 1,
+          "y": 2,
+          "x": 3
+        }
+      },
+      "output": "{\"a\":2,\"b\":1,\"c\":{\"x\":3,\"y\":2,\"z\":1}}"
+    },
+    {
+      "input": {
+        "1": 8,
+        "2": 5,
+        "10": 4,
+        "B": 1,
+        "a": 2,
+        "A": 3,
+        "Z": 6,
+        "z": 7
+      },
+      "output": "{\"1\":8,\"10\":4,\"2\":5,\"A\":3,\"B\":1,\"Z\":6,\"a\":2,\"z\":7}"
+    },
+    {
+      "input": {
+        "name": "café",
+        "jp": "日本",
+        "emoji": "😀🎉"
+      },
+      "output": "{\"emoji\":\"😀🎉\",\"jp\":\"日本\",\"name\":\"café\"}"
+    },
+    {
+      "input": {
+        "s": "a\"b\\c/d\ne\tf\bg\fh\ri\u0001jé"
+      },
+      "output": "{\"s\":\"a\\\"b\\\\c/d\\ne\\tf\\bg\\fh\\ri\\u0001jé\"}",
+      "sourceLiteral": "a\"b\\c/d\\ne\\tf\\bg\\fh\\ri\\u0001j\\u00e9"
+    },
+    {
+      "input": 0,
+      "output": "0"
+    },
+    {
+      "input": 42,
+      "output": "42"
+    },
+    {
+      "input": -42,
+      "output": "-42"
+    },
+    {
+      "input": 9007199254740991,
+      "output": "9007199254740991",
+      "comment": "Number.MAX_SAFE_INTEGER (2**53 - 1)"
+    },
+    {
+      "input": -9007199254740991,
+      "output": "-9007199254740991",
+      "comment": "-(2**53 - 1) (Number.MIN_SAFE_INTEGER)"
+    },
+    {
+      "input": 1,
+      "output": "1",
+      "sourceLiteral": "1.0",
+      "comment": "JS float literal 1.0"
+    },
+    {
+      "input": 1.5,
+      "output": "1.5",
+      "sourceLiteral": "1.5",
+      "comment": "JS float literal 1.5"
+    },
+    {
+      "input": 100,
+      "output": "100",
+      "sourceLiteral": "100.0",
+      "comment": "JS float literal 100.0"
+    },
+    {
+      "input": 0,
+      "output": "0",
+      "sourceLiteral": "-0.0",
+      "comment": "JS negative zero literal"
+    },
+    {
+      "input": 3.14159,
+      "output": "3.14159",
+      "sourceLiteral": "3.14159"
+    },
+    {
+      "input": true,
+      "output": "true"
+    },
+    {
+      "input": false,
+      "output": "false"
+    },
+    {
+      "input": null,
+      "output": "null"
+    },
+    {
+      "input": {},
+      "output": "{}"
+    },
+    {
+      "input": [],
+      "output": "[]"
+    },
+    {
+      "input": [
+        [
+          1,
+          2
+        ],
+        [
+          3,
+          [
+            4,
+            5
+          ]
+        ],
+        []
+      ],
+      "output": "[[1,2],[3,[4,5]],[]]"
+    },
+    {
+      "input": [
+        1,
+        "two",
+        true,
+        null,
+        {
+          "k": "v"
+        },
+        [
+          9
+        ]
+      ],
+      "output": "[1,\"two\",true,null,{\"k\":\"v\"},[9]]"
+    },
+    {
+      "input": {
+        "zeta": null,
+        "alpha": [
+          3,
+          2,
+          1
+        ],
+        "mid": {
+          "nested": true,
+          "n": -7
+        },
+        "beta": "x",
+        "2num": 2
+      },
+      "output": "{\"2num\":2,\"alpha\":[3,2,1],\"beta\":\"x\",\"mid\":{\"n\":-7,\"nested\":true},\"zeta\":null}"
+    }
+  ],
+  "signingKey": {
+    "seedBase64": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+    "keyId": "ed25519:test",
+    "alsoDerivedKeyId": "ed25519:iojj3X",
+    "publicKeyBase64": "iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w",
+    "publicKeyBase64url": "iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w"
+  },
+  "signJson": [
+    {
+      "label": "empty",
+      "input": {},
+      "serverName": "test.localhost",
+      "keyId": "ed25519:test",
+      "signatureBase64": "Q1z4N3LDhSt5Vq2AXvxbv8v7U3ZVMGxTML2/amGKJHaFidFsjYtvwji54+oWbb7AcrLPDoCiF7yMOgZ8kDfQCw",
+      "signedObject": {
+        "signatures": {
+          "test.localhost": {
+            "ed25519:test": "Q1z4N3LDhSt5Vq2AXvxbv8v7U3ZVMGxTML2/amGKJHaFidFsjYtvwji54+oWbb7AcrLPDoCiF7yMOgZ8kDfQCw"
+          }
+        }
+      }
+    },
+    {
+      "label": "few-keys",
+      "input": {
+        "one": 1,
+        "two": "2",
+        "three": true
+      },
+      "serverName": "test.localhost",
+      "keyId": "ed25519:test",
+      "signatureBase64": "u8NwVDerTpQpgtoK5RSAxdbrP2FfwEL2of1SNvdToNGyE1tiXr18/wDaL5uQcpfhumQ2TF4ttDydrv72EaRxBA",
+      "signedObject": {
+        "one": 1,
+        "two": "2",
+        "three": true,
+        "signatures": {
+          "test.localhost": {
+            "ed25519:test": "u8NwVDerTpQpgtoK5RSAxdbrP2FfwEL2of1SNvdToNGyE1tiXr18/wDaL5uQcpfhumQ2TF4ttDydrv72EaRxBA"
+          }
+        }
+      }
+    },
+    {
+      "label": "with-unsigned-and-signatures",
+      "input": {
+        "a": 1,
+        "unsigned": {
+          "age": 1234,
+          "transaction_id": "txn-1"
+        },
+        "signatures": {
+          "other.server": {
+            "ed25519:abc": "PRE-EXISTING-SIG"
+          }
+        }
+      },
+      "serverName": "test.localhost",
+      "keyId": "ed25519:test",
+      "signatureBase64": "KNX5GuHH4f5ofw1r7L0Qk6vocukKYiRfK52bXidS2LKWDjak/QJYV0Jr6fB4cw7TqdzePQL9MHYoOxe14O+XBA",
+      "signedObject": {
+        "a": 1,
+        "unsigned": {
+          "age": 1234,
+          "transaction_id": "txn-1"
+        },
+        "signatures": {
+          "other.server": {
+            "ed25519:abc": "PRE-EXISTING-SIG"
+          },
+          "test.localhost": {
+            "ed25519:test": "KNX5GuHH4f5ofw1r7L0Qk6vocukKYiRfK52bXidS2LKWDjak/QJYV0Jr6fB4cw7TqdzePQL9MHYoOxe14O+XBA"
+          }
+        }
+      }
+    },
+    {
+      "label": "nested-unicode",
+      "input": {
+        "content": {
+          "body": "héllo 日本 😀",
+          "nested": {
+            "z": 1,
+            "a": 2
+          }
+        },
+        "n": -5
+      },
+      "serverName": "test.localhost",
+      "keyId": "ed25519:test",
+      "signatureBase64": "YkIjfQjY7sSr5zgmbF6w+TwNimPK1Qoo6ik6FHo3ZRcyl5DMiX+dIDvSRE2MGLXGk7gltu8Xd1nbB7spJ+kGBg",
+      "signedObject": {
+        "content": {
+          "body": "héllo 日本 😀",
+          "nested": {
+            "z": 1,
+            "a": 2
+          }
+        },
+        "n": -5,
+        "signatures": {
+          "test.localhost": {
+            "ed25519:test": "YkIjfQjY7sSr5zgmbF6w+TwNimPK1Qoo6ik6FHo3ZRcyl5DMiX+dIDvSRE2MGLXGk7gltu8Xd1nbB7spJ+kGBg"
+          }
+        }
+      }
+    }
+  ],
+  "events": [
+    {
+      "label": "create_v11",
+      "roomVersion": "11",
+      "pdu": {
+        "auth_events": [],
+        "content": {
+          "room_version": "11",
+          "creator": "@alice:test.localhost",
+          "m.federate": true,
+          "extra_field": "kept-in-v11-full-content"
+        },
+        "depth": 1,
+        "hashes": {
+          "sha256": "STRIPPED"
+        },
+        "origin_server_ts": 1000,
+        "prev_events": [],
+        "room_id": "!room:test.localhost",
+        "sender": "@alice:test.localhost",
+        "signatures": {
+          "test.localhost": {
+            "ed25519:test": "STRIPPED"
+          }
+        },
+        "state_key": "",
+        "type": "m.room.create",
+        "unsigned": {
+          "age": 5
+        }
+      },
+      "redacted": {
+        "sender": "@alice:test.localhost",
+        "room_id": "!room:test.localhost",
+        "hashes": {
+          "sha256": "STRIPPED"
+        },
+        "signatures": {
+          "test.localhost": {
+            "ed25519:test": "STRIPPED"
+          }
+        },
+        "content": {
+          "room_version": "11",
+          "creator": "@alice:test.localhost",
+          "m.federate": true,
+          "extra_field": "kept-in-v11-full-content"
+        },
+        "type": "m.room.create",
+        "state_key": "",
+        "depth": 1,
+        "prev_events": [],
+        "auth_events": [],
+        "origin_server_ts": 1000
+      },
+      "contentHash": "uEkfBAiCY92AITfeGH3bu8Qd6z/uNz5hVLabj09nO+Q",
+      "eventId": "$XkjSA6_F9WztDeL0Z_oA3nMSXhzBq_mms2kaRSx0vSA"
+    },
+    {
+      "label": "create_v1_legacy",
+      "roomVersion": "1",
+      "pdu": {
+        "auth_events": [],
+        "content": {
+          "creator": "@alice:test.localhost",
+          "room_version": "1",
+          "extra_field": "dropped-in-v1-redaction"
+        },
+        "depth": 1,
+        "hashes": {
+          "sha256": "STRIPPED"
+        },
+        "origin": "test.localhost",
+        "origin_server_ts": 1000,
+        "prev_events": [],
+        "room_id": "!room:test.localhost",
+        "sender": "@alice:test.localhost",
+        "signatures": {
+          "test.localhost": {
+            "ed25519:test": "STRIPPED"
+          }
+        },
+        "state_key": "",
+        "type": "m.room.create"
+      },
+      "redacted": {
+        "sender": "@alice:test.localhost",
+        "room_id": "!room:test.localhost",
+        "hashes": {
+          "sha256": "STRIPPED"
+        },
+        "signatures": {
+          "test.localhost": {
+            "ed25519:test": "STRIPPED"
+          }
+        },
+        "content": {
+          "creator": "@alice:test.localhost"
+        },
+        "type": "m.room.create",
+        "state_key": "",
+        "depth": 1,
+        "prev_events": [],
+        "auth_events": [],
+        "origin_server_ts": 1000,
+        "origin": "test.localhost"
+      },
+      "contentHash": "C4XZJxdW+D856mVK7cyfohWabriSqoTtOtsW9NIJkyo",
+      "eventId": "$147wHhxy2rElAlpvybz3AcVWQXTaD9vwP2fpBYySGd4"
+    },
+    {
+      "label": "create_v12_msc4291",
+      "roomVersion": "12",
+      "pdu": {
+        "auth_events": [],
+        "content": {
+          "room_version": "12",
+          "m.federate": true
+        },
+        "depth": 1,
+        "hashes": {
+          "sha256": "STRIPPED"
+        },
+        "origin_server_ts": 1000,
+        "prev_events": [],
+        "room_id": "!should-be-stripped:test.localhost",
+        "sender": "@alice:test.localhost",
+        "signatures": {
+          "test.localhost": {
+            "ed25519:test": "STRIPPED"
+          }
+        },
+        "state_key": "",
+        "type": "m.room.create"
+      },
+      "redacted": {
+        "sender": "@alice:test.localhost",
+        "hashes": {
+          "sha256": "STRIPPED"
+        },
+        "signatures": {
+          "test.localhost": {
+            "ed25519:test": "STRIPPED"
+          }
+        },
+        "content": {
+          "room_version": "12",
+          "m.federate": true
+        },
+        "type": "m.room.create",
+        "state_key": "",
+        "depth": 1,
+        "prev_events": [],
+        "auth_events": [],
+        "origin_server_ts": 1000
+      },
+      "contentHash": "kqGCu9E3bhQHXarWaTWVRIxt6rTci3hoyvAG3E+rGeM",
+      "eventId": "$MWlTNkbgxDe0Vtt3E8FOnowvx5OK57Aw3su0dfb7B5M",
+      "isV12CreateEvent": true,
+      "roomIdV12": "!MWlTNkbgxDe0Vtt3E8FOnowvx5OK57Aw3su0dfb7B5M"
+    },
+    {
+      "label": "member_join_v11",
+      "roomVersion": "11",
+      "pdu": {
+        "auth_events": [
+          "$create",
+          "$pl"
+        ],
+        "content": {
+          "membership": "join",
+          "displayname": "Bob",
+          "avatar_url": "mxc://test.localhost/abc",
+          "join_authorised_via_users_server": "@authoriser:test.localhost",
+          "third_party_invite": {
+            "display_name": "dropped",
+            "signed": {
+              "mxid": "@bob:test.localhost",
+              "token": "tok",
+              "signatures": {
+                "test.localhost": {
+                  "ed25519:test": "sig"
+                }
+              }
+            }
+          }
+        },
+        "depth": 5,
+        "hashes": {
+          "sha256": "STRIPPED"
+        },
+        "origin_server_ts": 2000,
+        "prev_events": [
+          "$prev"
+        ],
+        "room_id": "!room:test.localhost",
+        "sender": "@bob:test.localhost",
+        "signatures": {
+          "test.localhost": {
+            "ed25519:test": "STRIPPED"
+          }
+        },
+        "state_key": "@bob:test.localhost",
+        "type": "m.room.member"
+      },
+      "redacted": {
+        "sender": "@bob:test.localhost",
+        "room_id": "!room:test.localhost",
+        "hashes": {
+          "sha256": "STRIPPED"
+        },
+        "signatures": {
+          "test.localhost": {
+            "ed25519:test": "STRIPPED"
+          }
+        },
+        "content": {
+          "membership": "join",
+          "join_authorised_via_users_server": "@authoriser:test.localhost",
+          "third_party_invite": {
+            "signed": {
+              "mxid": "@bob:test.localhost",
+              "token": "tok",
+              "signatures": {
+                "test.localhost": {
+                  "ed25519:test": "sig"
+                }
+              }
+            }
+          }
+        },
+        "type": "m.room.member",
+        "state_key": "@bob:test.localhost",
+        "depth": 5,
+        "prev_events": [
+          "$prev"
+        ],
+        "auth_events": [
+          "$create",
+          "$pl"
+        ],
+        "origin_server_ts": 2000
+      },
+      "contentHash": "h0vUWOIWaWqwKElmkEnNXSzGIOV8IlGn8NsyizEdAZ8",
+      "eventId": "$_muueoHL7Inbie98UKhZ3DW0O3TMpXOiyZlvI6vDhDs"
+    },
+    {
+      "label": "member_join_v10_legacy",
+      "roomVersion": "10",
+      "pdu": {
+        "auth_events": [
+          "$create",
+          "$pl"
+        ],
+        "content": {
+          "membership": "join",
+          "displayname": "Bob",
+          "join_authorised_via_users_server": "@authoriser:test.localhost",
+          "third_party_invite": {
+            "signed": {
+              "mxid": "@bob:test.localhost",
+              "token": "tok"
+            }
+          }
+        },
+        "depth": 5,
+        "hashes": {
+          "sha256": "STRIPPED"
+        },
+        "membership": "join",
+        "origin": "test.localhost",
+        "origin_server_ts": 2000,
+        "prev_events": [
+          "$prev"
+        ],
+        "prev_state": [],
+        "room_id": "!room:test.localhost",
+        "sender": "@bob:test.localhost",
+        "signatures": {
+          "test.localhost": {
+            "ed25519:test": "STRIPPED"
+          }
+        },
+        "state_key": "@bob:test.localhost",
+        "type": "m.room.member"
+      },
+      "redacted": {
+        "sender": "@bob:test.localhost",
+        "room_id": "!room:test.localhost",
+        "hashes": {
+          "sha256": "STRIPPED"
+        },
+        "signatures": {
+          "test.localhost": {
+            "ed25519:test": "STRIPPED"
+          }
+        },
+        "content": {
+          "membership": "join",
+          "join_authorised_via_users_server": "@authoriser:test.localhost"
+        },
+        "type": "m.room.member",
+        "state_key": "@bob:test.localhost",
+        "depth": 5,
+        "prev_events": [
+          "$prev"
+        ],
+        "auth_events": [
+          "$create",
+          "$pl"
+        ],
+        "origin_server_ts": 2000,
+        "prev_state": [],
+        "membership": "join",
+        "origin": "test.localhost"
+      },
+      "contentHash": "9zJPn1xwIuuyLCgHawYESIHskukQGwRiqXBO62zgAj8",
+      "eventId": "$zgKd0Xlz192Su2HIIoDTX5x7a_3AG8ZynhEhk2L4dF0"
+    },
+    {
+      "label": "power_levels_v11",
+      "roomVersion": "11",
+      "pdu": {
+        "auth_events": [
+          "$create",
+          "$pl"
+        ],
+        "content": {
+          "ban": 50,
+          "events": {
+            "m.room.name": 100,
+            "m.room.power_levels": 100
+          },
+          "events_default": 0,
+          "invite": 50,
+          "kick": 50,
+          "redact": 50,
+          "state_default": 50,
+          "users": {
+            "@alice:test.localhost": 100,
+            "@bob:test.localhost": 50
+          },
+          "users_default": 0,
+          "notifications": {
+            "room": 50
+          }
+        },
+        "depth": 3,
+        "hashes": {
+          "sha256": "STRIPPED"
+        },
+        "origin_server_ts": 1500,
+        "prev_events": [
+          "$prev"
+        ],
+        "room_id": "!room:test.localhost",
+        "sender": "@alice:test.localhost",
+        "signatures": {
+          "test.localhost": {
+            "ed25519:test": "STRIPPED"
+          }
+        },
+        "state_key": "",
+        "type": "m.room.power_levels"
+      },
+      "redacted": {
+        "sender": "@alice:test.localhost",
+        "room_id": "!room:test.localhost",
+        "hashes": {
+          "sha256": "STRIPPED"
+        },
+        "signatures": {
+          "test.localhost": {
+            "ed25519:test": "STRIPPED"
+          }
+        },
+        "content": {
+          "users": {
+            "@alice:test.localhost": 100,
+            "@bob:test.localhost": 50
+          },
+          "users_default": 0,
+          "events": {
+            "m.room.name": 100,
+            "m.room.power_levels": 100
+          },
+          "events_default": 0,
+          "state_default": 50,
+          "ban": 50,
+          "kick": 50,
+          "redact": 50,
+          "invite": 50
+        },
+        "type": "m.room.power_levels",
+        "state_key": "",
+        "depth": 3,
+        "prev_events": [
+          "$prev"
+        ],
+        "auth_events": [
+          "$create",
+          "$pl"
+        ],
+        "origin_server_ts": 1500
+      },
+      "contentHash": "xgdiIXdjjSp1BNnt23adF87l7wBFANYR5hgQMzA+gn4",
+      "eventId": "$z34ZphEjgLz0LfYLtbR-nd_i5NJHolVYVc9BTf8YM5M"
+    },
+    {
+      "label": "power_levels_v6_legacy",
+      "roomVersion": "6",
+      "pdu": {
+        "auth_events": [
+          "$create",
+          "$pl"
+        ],
+        "content": {
+          "ban": 50,
+          "events": {
+            "m.room.name": 100
+          },
+          "events_default": 0,
+          "invite": 50,
+          "kick": 50,
+          "redact": 50,
+          "state_default": 50,
+          "users": {
+            "@alice:test.localhost": 100
+          },
+          "users_default": 0
+        },
+        "depth": 3,
+        "hashes": {
+          "sha256": "STRIPPED"
+        },
+        "origin": "test.localhost",
+        "origin_server_ts": 1500,
+        "prev_events": [
+          "$prev"
+        ],
+        "prev_state": [],
+        "room_id": "!room:test.localhost",
+        "sender": "@alice:test.localhost",
+        "signatures": {
+          "test.localhost": {
+            "ed25519:test": "STRIPPED"
+          }
+        },
+        "state_key": "",
+        "type": "m.room.power_levels"
+      },
+      "redacted": {
+        "sender": "@alice:test.localhost",
+        "room_id": "!room:test.localhost",
+        "hashes": {
+          "sha256": "STRIPPED"
+        },
+        "signatures": {
+          "test.localhost": {
+            "ed25519:test": "STRIPPED"
+          }
+        },
+        "content": {
+          "users": {
+            "@alice:test.localhost": 100
+          },
+          "users_default": 0,
+          "events": {
+            "m.room.name": 100
+          },
+          "events_default": 0,
+          "state_default": 50,
+          "ban": 50,
+          "kick": 50,
+          "redact": 50
+        },
+        "type": "m.room.power_levels",
+        "state_key": "",
+        "depth": 3,
+        "prev_events": [
+          "$prev"
+        ],
+        "auth_events": [
+          "$create",
+          "$pl"
+        ],
+        "origin_server_ts": 1500,
+        "prev_state": [],
+        "origin": "test.localhost"
+      },
+      "contentHash": "xrUx9JVzaNyzhkpdzjnjJ2jjsa+Kcmapw2xOR7szuk0",
+      "eventId": "$Xh69n9jTIbzrdIi_TXAFvj5SfXZeSGtHsd8k-oLCSCY"
+    },
+    {
+      "label": "join_rules_restricted_v11",
+      "roomVersion": "11",
+      "pdu": {
+        "auth_events": [
+          "$create",
+          "$pl"
+        ],
+        "content": {
+          "join_rule": "restricted",
+          "allow": [
+            {
+              "type": "m.room_membership",
+              "room_id": "!space:test.localhost"
+            },
+            {
+              "type": "m.room_membership",
+              "room_id": "!other:test.localhost"
+            }
+          ],
+          "extra": "dropped"
+        },
+        "depth": 4,
+        "hashes": {
+          "sha256": "STRIPPED"
+        },
+        "origin_server_ts": 1600,
+        "prev_events": [
+          "$prev"
+        ],
+        "room_id": "!room:test.localhost",
+        "sender": "@alice:test.localhost",
+        "signatures": {
+          "test.localhost": {
+            "ed25519:test": "STRIPPED"
+          }
+        },
+        "state_key": "",
+        "type": "m.room.join_rules"
+      },
+      "redacted": {
+        "sender": "@alice:test.localhost",
+        "room_id": "!room:test.localhost",
+        "hashes": {
+          "sha256": "STRIPPED"
+        },
+        "signatures": {
+          "test.localhost": {
+            "ed25519:test": "STRIPPED"
+          }
+        },
+        "content": {
+          "join_rule": "restricted",
+          "allow": [
+            {
+              "type": "m.room_membership",
+              "room_id": "!space:test.localhost"
+            },
+            {
+              "type": "m.room_membership",
+              "room_id": "!other:test.localhost"
+            }
+          ]
+        },
+        "type": "m.room.join_rules",
+        "state_key": "",
+        "depth": 4,
+        "prev_events": [
+          "$prev"
+        ],
+        "auth_events": [
+          "$create",
+          "$pl"
+        ],
+        "origin_server_ts": 1600
+      },
+      "contentHash": "P4X/f5dm7SEJWbiHL78jI0wxRjFbxDVYAwJP5rf6WxE",
+      "eventId": "$LmMODH7zGpxYNvVoztunznwFmi0DbUFkvY3jAwWjAVM"
+    },
+    {
+      "label": "message_v11",
+      "roomVersion": "11",
+      "pdu": {
+        "auth_events": [
+          "$create",
+          "$pl",
+          "$member"
+        ],
+        "content": {
+          "msgtype": "m.text",
+          "body": "Hello, world! café 日本 😀",
+          "m.mentions": {
+            "user_ids": [
+              "@alice:test.localhost"
+            ]
+          }
+        },
+        "depth": 7,
+        "hashes": {
+          "sha256": "STRIPPED"
+        },
+        "origin_server_ts": 3000,
+        "prev_events": [
+          "$prev"
+        ],
+        "room_id": "!room:test.localhost",
+        "sender": "@bob:test.localhost",
+        "signatures": {
+          "test.localhost": {
+            "ed25519:test": "STRIPPED"
+          }
+        },
+        "type": "m.room.message",
+        "unsigned": {
+          "age": 12
+        }
+      },
+      "redacted": {
+        "sender": "@bob:test.localhost",
+        "room_id": "!room:test.localhost",
+        "hashes": {
+          "sha256": "STRIPPED"
+        },
+        "signatures": {
+          "test.localhost": {
+            "ed25519:test": "STRIPPED"
+          }
+        },
+        "content": {},
+        "type": "m.room.message",
+        "depth": 7,
+        "prev_events": [
+          "$prev"
+        ],
+        "auth_events": [
+          "$create",
+          "$pl",
+          "$member"
+        ],
+        "origin_server_ts": 3000
+      },
+      "contentHash": "cnkXKkqwWi5NrADBlpvC6n20wBWmB2oqPJGA1ydJbzQ",
+      "eventId": "$tke6deWQ-GK3bpG48-ljuDQ_79oIruj3xmGZ4RBmMR8"
+    },
+    {
+      "label": "redaction_v11",
+      "roomVersion": "11",
+      "pdu": {
+        "auth_events": [
+          "$create",
+          "$pl",
+          "$member"
+        ],
+        "content": {
+          "redacts": "$target_event:test.localhost",
+          "reason": "spam"
+        },
+        "depth": 8,
+        "hashes": {
+          "sha256": "STRIPPED"
+        },
+        "origin_server_ts": 3100,
+        "prev_events": [
+          "$prev"
+        ],
+        "redacts": "$target_event:test.localhost",
+        "room_id": "!room:test.localhost",
+        "sender": "@alice:test.localhost",
+        "signatures": {
+          "test.localhost": {
+            "ed25519:test": "STRIPPED"
+          }
+        },
+        "type": "m.room.redaction"
+      },
+      "redacted": {
+        "sender": "@alice:test.localhost",
+        "room_id": "!room:test.localhost",
+        "hashes": {
+          "sha256": "STRIPPED"
+        },
+        "signatures": {
+          "test.localhost": {
+            "ed25519:test": "STRIPPED"
+          }
+        },
+        "content": {
+          "redacts": "$target_event:test.localhost"
+        },
+        "type": "m.room.redaction",
+        "depth": 8,
+        "prev_events": [
+          "$prev"
+        ],
+        "auth_events": [
+          "$create",
+          "$pl",
+          "$member"
+        ],
+        "origin_server_ts": 3100
+      },
+      "contentHash": "+cylcUPMEUXlb64sEhLSoXQVBX4X8SdMvuOOSmRF3+s",
+      "eventId": "$WMc5xZmW0DPfn92aQANb-odGJ7JSam9W-SNJSfMyKRw"
+    },
+    {
+      "label": "redaction_v6_legacy",
+      "roomVersion": "6",
+      "pdu": {
+        "auth_events": [
+          "$create",
+          "$pl",
+          "$member"
+        ],
+        "content": {
+          "reason": "spam"
+        },
+        "depth": 8,
+        "hashes": {
+          "sha256": "STRIPPED"
+        },
+        "origin": "test.localhost",
+        "origin_server_ts": 3100,
+        "prev_events": [
+          "$prev"
+        ],
+        "prev_state": [],
+        "redacts": "$target_event:test.localhost",
+        "room_id": "!room:test.localhost",
+        "sender": "@alice:test.localhost",
+        "signatures": {
+          "test.localhost": {
+            "ed25519:test": "STRIPPED"
+          }
+        },
+        "type": "m.room.redaction"
+      },
+      "redacted": {
+        "sender": "@alice:test.localhost",
+        "room_id": "!room:test.localhost",
+        "hashes": {
+          "sha256": "STRIPPED"
+        },
+        "signatures": {
+          "test.localhost": {
+            "ed25519:test": "STRIPPED"
+          }
+        },
+        "content": {},
+        "type": "m.room.redaction",
+        "depth": 8,
+        "prev_events": [
+          "$prev"
+        ],
+        "auth_events": [
+          "$create",
+          "$pl",
+          "$member"
+        ],
+        "origin_server_ts": 3100,
+        "prev_state": [],
+        "origin": "test.localhost"
+      },
+      "contentHash": "QY7Ac9VHsoZAJhDRIsWgjClB6gJLATrCBtxvBrEl/6Q",
+      "eventId": "$nP26uC1LP8i3DfMUlg0YqL2T4k_apZF1x2fCa6JUntE"
+    }
+  ],
+  "signEvent": [
+    {
+      "label": "create_v11",
+      "roomVersion": "11",
+      "pdu": {
+        "auth_events": [],
+        "content": {
+          "room_version": "11",
+          "creator": "@alice:test.localhost",
+          "m.federate": true,
+          "extra_field": "kept-in-v11-full-content"
+        },
+        "depth": 1,
+        "hashes": {
+          "sha256": "STRIPPED"
+        },
+        "origin_server_ts": 1000,
+        "prev_events": [],
+        "room_id": "!room:test.localhost",
+        "sender": "@alice:test.localhost",
+        "signatures": {
+          "test.localhost": {
+            "ed25519:test": "STRIPPED"
+          }
+        },
+        "state_key": "",
+        "type": "m.room.create",
+        "unsigned": {
+          "age": 5
+        }
+      },
+      "signedEvent": {
+        "auth_events": [],
+        "content": {
+          "room_version": "11",
+          "creator": "@alice:test.localhost",
+          "m.federate": true,
+          "extra_field": "kept-in-v11-full-content"
+        },
+        "depth": 1,
+        "hashes": {
+          "sha256": "uEkfBAiCY92AITfeGH3bu8Qd6z/uNz5hVLabj09nO+Q"
+        },
+        "origin_server_ts": 1000,
+        "prev_events": [],
+        "room_id": "!room:test.localhost",
+        "sender": "@alice:test.localhost",
+        "signatures": {
+          "test.localhost": {
+            "ed25519:test": "LdxR6IcsyHvcD5TGTNUdgehFjImY/B1VSxsTChUFONdtZf9xJdXuGYDv+Hl7uTXt0Yy9B9K/gAi+Tdl+w6O1BQ"
+          }
+        },
+        "state_key": "",
+        "type": "m.room.create",
+        "unsigned": {
+          "age": 5
+        }
+      },
+      "signatureBase64": "LdxR6IcsyHvcD5TGTNUdgehFjImY/B1VSxsTChUFONdtZf9xJdXuGYDv+Hl7uTXt0Yy9B9K/gAi+Tdl+w6O1BQ"
+    },
+    {
+      "label": "message_v11",
+      "roomVersion": "11",
+      "pdu": {
+        "auth_events": [
+          "$create",
+          "$pl",
+          "$member"
+        ],
+        "content": {
+          "redacts": "$target_event:test.localhost",
+          "reason": "spam"
+        },
+        "depth": 8,
+        "hashes": {
+          "sha256": "STRIPPED"
+        },
+        "origin_server_ts": 3100,
+        "prev_events": [
+          "$prev"
+        ],
+        "redacts": "$target_event:test.localhost",
+        "room_id": "!room:test.localhost",
+        "sender": "@alice:test.localhost",
+        "signatures": {
+          "test.localhost": {
+            "ed25519:test": "STRIPPED"
+          }
+        },
+        "type": "m.room.redaction"
+      },
+      "signedEvent": {
+        "auth_events": [
+          "$create",
+          "$pl",
+          "$member"
+        ],
+        "content": {
+          "redacts": "$target_event:test.localhost",
+          "reason": "spam"
+        },
+        "depth": 8,
+        "hashes": {
+          "sha256": "+cylcUPMEUXlb64sEhLSoXQVBX4X8SdMvuOOSmRF3+s"
+        },
+        "origin_server_ts": 3100,
+        "prev_events": [
+          "$prev"
+        ],
+        "redacts": "$target_event:test.localhost",
+        "room_id": "!room:test.localhost",
+        "sender": "@alice:test.localhost",
+        "signatures": {
+          "test.localhost": {
+            "ed25519:test": "CgEC9JGAYEvrOLyPF5SB8jsGYLjie5m8giyhKdtbqg51yXpCDHISkPqeDDNW+HhJpJZC970r0TedVOyBcf+dAA"
+          }
+        },
+        "type": "m.room.redaction"
+      },
+      "signatureBase64": "CgEC9JGAYEvrOLyPF5SB8jsGYLjie5m8giyhKdtbqg51yXpCDHISkPqeDDNW+HhJpJZC970r0TedVOyBcf+dAA"
+    }
+  ]
+}
