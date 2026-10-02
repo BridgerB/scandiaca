@@ -213,7 +213,19 @@ pub async fn make_join(
         && membership.as_deref() != Some("join")
     {
         if is_restricted {
-            if !crate::room_ops::user_satisfies_restricted_allow(&*st.storage, &room, &user_id, None).await
+            // Require OUR server to also be joined to the allowed room: we can only
+            // vouch for the join if we can actually see the joining user's
+            // membership there. Once our last user leaves the allowed room we can no
+            // longer authorise, so the join must fail over to another resident
+            // server (TestRestrictedRoomsRemoteJoinFailOver). Mirrors strix passing
+            // serverName to userSatisfiesRestrictedAllow.
+            if !crate::room_ops::user_satisfies_restricted_allow(
+                &*st.storage,
+                &room,
+                &user_id,
+                Some(st.server_name.as_ref()),
+            )
+            .await
             {
                 return Err(unable_to_authorise_join(
                     "User is not a member of any room in the allow list",
@@ -321,6 +333,11 @@ async fn send_join_impl(
             vec![eid.clone()],
         )
         .await;
+
+    // Distribute the join to the room's other resident servers (the joining server
+    // receives it in our response) so they observe the new member
+    // (TestRestrictedRoomsRemoteJoinFailOver).
+    fanout_membership_to_residents(&st, &rid, &co_signed, &[auth.origin.as_str()]).await;
 
     // A remote user (re)joining: evict any cached device keys so the next query
     // re-fetches fresh ones.

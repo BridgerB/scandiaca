@@ -28,10 +28,20 @@ pub async fn join(
     State(st): State<AppState>,
     auth: AuthCtx,
     Path(room_id_or_alias): Path<String>,
-    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
     OptionalJson(body): OptionalJson,
 ) -> MatrixResult<Json<Value>> {
     let user_id = auth.user_id.as_str();
+    // All ?server_name= values (a HashMap would drop the duplicates the client
+    // sends as a failover list, e.g. ?server_name=hs2&server_name=hs1).
+    let server_name_params: Vec<String> = raw_query
+        .as_deref()
+        .unwrap_or("")
+        .split('&')
+        .filter_map(|kv| kv.strip_prefix("server_name="))
+        .map(|v| v.replace("%3A", ":").replace("%3a", ":"))
+        .filter(|s| !s.is_empty())
+        .collect();
 
     // Resolve alias → room_id, collecting candidate servers. Local aliases use the
     // directory; a remote alias is resolved over federation (query/directory).
@@ -89,15 +99,39 @@ pub async fn join(
         .map(|r| crate::events::server_has_member(&r.state_events, st.server_name.as_ref(), "join"))
         .unwrap_or(false);
     if !resident {
-        let mut candidates: Vec<String> = alias_servers.clone();
-        if let Some(sn) = params.get("server_name") {
-            candidates.push(sn.clone());
+        // Primary candidates: alias-resolved servers + every ?server_name= param,
+        // minus ourselves. The room-id server and inviter server are FALLBACKS,
+        // added only when no primary remote candidate was named — so a join via
+        // only a non-authorising server FAILS rather than silently failing over to
+        // the room's home server (TestRestrictedRoomsRemoteJoinFailOver). Mirrors
+        // strix attemptFederationJoin.
+        let mut candidates: Vec<String> = Vec::new();
+        for s in alias_servers.iter().chain(server_name_params.iter()) {
+            if !s.is_empty() && s.as_str() != st.server_name.as_ref() && !candidates.contains(s) {
+                candidates.push(s.clone());
+            }
         }
-        if room_id.contains(':') {
-            candidates.push(crate::ids::domain_of(&room_id).to_string());
+        if candidates.is_empty() {
+            if room_id.contains(':') {
+                let rs = crate::ids::domain_of(&room_id).to_string();
+                if !rs.is_empty() && rs != st.server_name.as_ref() {
+                    candidates.push(rs);
+                }
+            }
+            if let Some(room) = &room_opt {
+                if let Some(inviter) = room
+                    .state_events
+                    .get(&format!("m.room.member\u{1f}{user_id}"))
+                    .and_then(|e| e.get("sender"))
+                    .and_then(Value::as_str)
+                {
+                    let is = crate::ids::domain_of(inviter).to_string();
+                    if !is.is_empty() && is != st.server_name.as_ref() && !candidates.contains(&is) {
+                        candidates.push(is);
+                    }
+                }
+            }
         }
-        candidates.retain(|s| !s.is_empty() && s != st.server_name.as_ref());
-        candidates.dedup();
         crate::handlers::federation::membership::perform_federation_join(
             &st, user_id, &room_id, &candidates,
         )
