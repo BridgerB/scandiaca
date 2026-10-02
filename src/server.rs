@@ -621,6 +621,14 @@ pub fn build_router(state: AppState) -> Router {
             "/_matrix/client/unstable/event_relationships",
             post(handlers::relations::post_event_relationships),
         )
+        .route(
+            "/_matrix/client/unstable/org.matrix.msc4140/delayed_events",
+            get(handlers::delayed_events::get_delayed_events),
+        )
+        .route(
+            "/_matrix/client/unstable/org.matrix.msc4140/delayed_events/{delayId}/{action}",
+            post(handlers::delayed_events::post_delayed_event_action),
+        )
         // Directory
         .route(
             "/_matrix/client/v3/directory/room/{roomAlias}",
