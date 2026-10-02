@@ -115,12 +115,10 @@ pub async fn perform_federation_join(
         st.storage
             .set_state_event(&RoomId::from(room_id), stored_event, &EventId::from(event_id.as_str()))
             .await;
-        // Backfill recent history so the newly-joined room's timeline shows shared
-        // history in /sync and /messages (TestMessagesOverFederation).
-        crate::federation::outbound::backfill_missing_history(
-            &*st.storage, client, &st.server_name, &RoomId::from(room_id), Some(&room_version),
-        )
-        .await;
+        // History is backfilled lazily on the first backward /messages page (see
+        // handlers/room_events.rs), matching strix. Backfilling eagerly here sends
+        // an unsolicited /backfill that a minimal peer rejects as unexpected
+        // (TestFederatedEventRelationships).
         return Ok(());
     }
     Err(last_err)

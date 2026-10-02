@@ -294,6 +294,10 @@ pub fn build_router(state: AppState) -> Router {
             get(handlers::spaces::get_federation_hierarchy),
         )
         .route(
+            "/_matrix/federation/unstable/event_relationships",
+            post(handlers::relations::post_federation_event_relationships),
+        )
+        .route(
             "/_matrix/federation/v1/make_join/{roomId}/{userId}",
             get(handlers::federation::membership::make_join),
         )
@@ -612,6 +616,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/_matrix/client/v1/rooms/{roomId}/threads",
             get(handlers::relations::get_threads),
+        )
+        .route(
+            "/_matrix/client/unstable/event_relationships",
+            post(handlers::relations::post_event_relationships),
         )
         // Directory
         .route(
