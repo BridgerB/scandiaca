@@ -78,8 +78,17 @@ pub async fn join(
     };
     let rid = RoomId::from(room_id.as_str());
 
-    let Some(room) = st.storage.get_room(&rid).await else {
-        // Room unknown locally → join over federation via a resident server.
+    // Join over federation when the room is unknown locally, OR known only via a
+    // stripped invite — we hold the room but are not resident (no local joined
+    // member), so we cannot build a valid join event locally. Mirrors strix
+    // forcing a federated join when the server is not resident
+    // (TestRestrictedRoomsRemoteJoinLocalUser).
+    let room_opt = st.storage.get_room(&rid).await;
+    let resident = room_opt
+        .as_ref()
+        .map(|r| crate::events::server_has_member(&r.state_events, st.server_name.as_ref(), "join"))
+        .unwrap_or(false);
+    if !resident {
         let mut candidates: Vec<String> = alias_servers.clone();
         if let Some(sn) = params.get("server_name") {
             candidates.push(sn.clone());
@@ -97,7 +106,8 @@ pub async fn join(
         crate::handlers::room_upgrade::copy_predecessor_push_rules_on_join(&*st.storage, user_id, &room_id).await;
         crate::handlers::e2ee::notify_device_list_update_on_join(&st, &rid, &auth.user_id).await;
         return Ok(Json(json!({ "room_id": room_id })));
-    };
+    }
+    let room = room_opt.expect("resident implies room present");
     if get_membership(&room, user_id) == Some("ban") {
         return Err(forbidden("You are banned from this room"));
     }
