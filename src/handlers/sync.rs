@@ -99,6 +99,10 @@ pub async fn sync(
     let timeout: u64 = params.get("timeout").and_then(|s| s.parse().ok()).unwrap_or(0);
     let is_initial = since.is_none();
     let since_pos = since.unwrap_or(0);
+    // MSC4222: clients opt in with use_state_after=true (or the unstable key); each
+    // joined room then carries a `state_after` block instead of `state`.
+    let use_state_after = params.get("use_state_after").map(String::as_str) == Some("true")
+        || params.get("org.matrix.msc4222.use_state_after").map(String::as_str) == Some("true");
 
     // `?set_presence=` sets the caller's presence (default online). Only write
     // when it actually changes, to avoid waking every long-poll each sync
@@ -151,7 +155,7 @@ pub async fn sync(
         match m.membership.as_str() {
             "join" => {
                 let (room_json, has_content) =
-                    build_join_room(&st, &auth, room_id, is_initial, since_pos, next_batch, &filter, &rules, display_name.as_deref()).await;
+                    build_join_room(&st, &auth, room_id, is_initial, since_pos, next_batch, &filter, &rules, display_name.as_deref(), use_state_after).await;
                 // On incremental sync omit rooms with no changes this window
                 // (TestSync: an unchanged room must not appear).
                 if is_initial || has_content {
@@ -565,6 +569,7 @@ async fn build_join_room(
     filter: &ResolvedFilter,
     rules: &Value,
     display_name: Option<&str>,
+    use_state_after: bool,
 ) -> (Value, bool) {
     // Back-pagination boundary for a limited initial window (prev_batch).
     let mut init_boundary: Option<i64> = None;
@@ -639,6 +644,26 @@ async fn build_join_room(
             .collect()
     };
 
+    // MSC4222: state_after is the room state *after* the timeline batch. Initial:
+    // the full current state (reuse state_events). Incremental: the state events
+    // (carrying a state_key) that changed in this window — INCLUDING ones also in
+    // the timeline (e.g. a delayed state event firing on a waking long-poll).
+    let state_after: Option<Vec<Value>> = if !use_state_after {
+        None
+    } else if is_initial {
+        Some(state_events.clone())
+    } else {
+        let w = st.storage.get_events_by_room_since(room_id, since_pos, 100000).await;
+        Some(
+            w.events
+                .iter()
+                .filter(|e| e.event.get("state_key").is_some())
+                .map(|er| client_event_no_room(&er.event, er.event_id.as_str()))
+                .filter(|ce| matches_room_event_filter(ce, filter.state_filter.as_ref()))
+                .collect(),
+        )
+    };
+
     let (notification_count, highlight_count) =
         unread_counts(st, auth, room_id, rules, display_name).await;
 
@@ -660,27 +685,34 @@ async fn build_join_room(
         let t = e.get("type").and_then(Value::as_str);
         t == Some("m.receipt") || (t == Some("m.typing") && typing_changed)
     });
+    let state_after_nonempty = state_after.as_ref().map(|s| !s.is_empty()).unwrap_or(false);
     let has_content = !timeline_events.is_empty()
         || !state_events.is_empty()
+        || state_after_nonempty
         || !room_ad.is_empty()
         || has_ephemeral_content;
 
-    let room = json!({
-        "summary": build_room_summary(st, room_id, auth.user_id.as_str()).await,
-        "timeline": {
-            "events": timeline_events,
-            "limited": limited,
-            "prev_batch": prev_batch.to_string(),
-        },
-        "state": { "events": state_events },
-        "account_data": { "events": room_ad },
-        "ephemeral": { "events": ephemeral },
-        "unread_notifications": {
-            "notification_count": notification_count,
-            "highlight_count": highlight_count,
-        },
-    });
-    (room, has_content)
+    let mut room = Map::new();
+    room.insert("summary".to_string(), build_room_summary(st, room_id, auth.user_id.as_str()).await);
+    room.insert(
+        "timeline".to_string(),
+        json!({ "events": timeline_events, "limited": limited, "prev_batch": prev_batch.to_string() }),
+    );
+    // MSC4222: emit state_after (stable + unstable keys) in place of state.
+    if let Some(sa) = state_after {
+        let block = json!({ "events": sa });
+        room.insert("state_after".to_string(), block.clone());
+        room.insert("org.matrix.msc4222.state_after".to_string(), block);
+    } else {
+        room.insert("state".to_string(), json!({ "events": state_events }));
+    }
+    room.insert("account_data".to_string(), json!({ "events": room_ad }));
+    room.insert("ephemeral".to_string(), json!({ "events": ephemeral }));
+    room.insert(
+        "unread_notifications".to_string(),
+        json!({ "notification_count": notification_count, "highlight_count": highlight_count }),
+    );
+    (Value::Object(room), has_content)
 }
 
 /// MSC4115: stamp `unsigned.membership` on each timeline event with the syncing
