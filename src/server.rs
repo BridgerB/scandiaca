@@ -290,6 +290,14 @@ pub fn build_router(state: AppState) -> Router {
             get(handlers::federation::get_backfill),
         )
         .route(
+            "/_matrix/federation/v1/hierarchy/{roomId}",
+            get(handlers::spaces::get_federation_hierarchy),
+        )
+        .route(
+            "/_matrix/federation/unstable/event_relationships",
+            post(handlers::relations::post_federation_event_relationships),
+        )
+        .route(
             "/_matrix/federation/v1/make_join/{roomId}/{userId}",
             get(handlers::federation::membership::make_join),
         )
@@ -609,6 +617,18 @@ pub fn build_router(state: AppState) -> Router {
             "/_matrix/client/v1/rooms/{roomId}/threads",
             get(handlers::relations::get_threads),
         )
+        .route(
+            "/_matrix/client/unstable/event_relationships",
+            post(handlers::relations::post_event_relationships),
+        )
+        .route(
+            "/_matrix/client/unstable/org.matrix.msc4140/delayed_events",
+            get(handlers::delayed_events::get_delayed_events),
+        )
+        .route(
+            "/_matrix/client/unstable/org.matrix.msc4140/delayed_events/{delayId}/{action}",
+            post(handlers::delayed_events::post_delayed_event_action),
+        )
         // Directory
         .route(
             "/_matrix/client/v3/directory/room/{roomAlias}",
@@ -634,6 +654,10 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/_matrix/client/v1/rooms/{roomId}/hierarchy",
+            get(handlers::spaces::get_hierarchy),
+        )
+        .route(
+            "/_matrix/client/v3/rooms/{roomId}/hierarchy",
             get(handlers::spaces::get_hierarchy),
         )
         .route(

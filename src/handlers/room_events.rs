@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 
 use axum::extract::{Path, Query, State};
+use crate::extract::OptionalJson;
 use axum::response::Json;
 use serde_json::{json, Value};
 
@@ -95,8 +96,17 @@ pub async fn put_send_event(
     State(st): State<AppState>,
     auth: AuthCtx,
     Path((room_id, event_type, txn_id)): Path<(String, String, String)>,
-    Json(content): Json<Value>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+    OptionalJson(content): OptionalJson,
 ) -> MatrixResult<Json<Value>> {
+    // MSC4140: with ?org.matrix.msc4140.delay=N, schedule a delayed event instead.
+    // (OptionalJson tolerates the empty body the idempotent re-request sends.)
+    if let Some(delay_ms) = crate::handlers::delayed_events::delay_param(&raw_query)? {
+        return crate::handlers::delayed_events::schedule_message(
+            &st, &auth, &room_id, &event_type, &txn_id, delay_ms, &content,
+        )
+        .await;
+    }
     let room_id: RoomId = room_id.into();
     let scoped_txn = format!("{room_id}\u{1f}{txn_id}");
 
@@ -183,12 +193,21 @@ pub async fn put_state_event(
     State(st): State<AppState>,
     auth: AuthCtx,
     Path(params): Path<Vec<String>>,
-    Json(content): Json<Value>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+    OptionalJson(content): OptionalJson,
 ) -> MatrixResult<Json<Value>> {
     // Path is [roomId, eventType] or [roomId, eventType, stateKey].
     let room_id = params.first().cloned().unwrap_or_default();
     let event_type = params.get(1).cloned().unwrap_or_default();
     let state_key = params.get(2).cloned().unwrap_or_default();
+
+    // MSC4140: with ?org.matrix.msc4140.delay=N, schedule a delayed state event.
+    if let Some(delay_ms) = crate::handlers::delayed_events::delay_param(&raw_query)? {
+        return crate::handlers::delayed_events::schedule_state(
+            &st, &auth, &room_id, &event_type, &state_key, delay_ms, &content,
+        )
+        .await;
+    }
 
     if !content.is_object() {
         return Err(bad_json("Event content must be a JSON object"));

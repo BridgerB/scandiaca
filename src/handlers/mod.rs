@@ -10,6 +10,7 @@ pub mod admin;
 pub mod appservice;
 pub mod auth;
 pub mod cross_signing;
+pub mod delayed_events;
 pub mod devices;
 pub mod directory;
 pub mod discovery;
