@@ -1,0 +1,114 @@
+name: Complement
+
+# Run the standard Matrix Complement integration suite against scandiaca on a
+# clean GitHub-hosted runner (fresh Ubuntu VM with Docker — consistent every
+# time, no contention with a local machine). Trigger it by hand from the Actions
+# tab; results upload as an artifact and a pass/fail summary is written to the
+# run page.
+on:
+  workflow_dispatch:
+    inputs:
+      run:
+        description: "Optional -run regex (blank = whole suite, e.g. TestFederationRoomsInvite)"
+        required: false
+        default: ""
+      go_timeout:
+        description: "go test -timeout value"
+        required: false
+        default: "90m"
+      complement_ref:
+        description: "matrix-org/complement git ref to pin"
+        required: false
+        default: "61af675eb0e8c6b298dc5dff96e1893f07977d26"
+
+# Let a new manual run supersede an in-flight one.
+concurrency:
+  group: complement-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  complement:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - name: Checkout scandiaca
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+
+      - name: Build the scandiaca Complement image
+        run: docker build -t complement-scandiaca -f Dockerfile.complement .
+
+      - name: Fetch Complement
+        run: |
+          mkdir -p "$RUNNER_TEMP/complement"
+          cd "$RUNNER_TEMP/complement"
+          git init -q
+          git remote add origin https://github.com/matrix-org/complement.git
+          git fetch -q --depth 1 origin "${{ github.event.inputs.complement_ref }}"
+          git checkout -q FETCH_HEAD
+
+      - name: Run Complement
+        id: run
+        working-directory: ${{ runner.temp }}/complement
+        env:
+          COMPLEMENT_BASE_IMAGE: complement-scandiaca
+          GOTOOLCHAIN: auto
+        run: |
+          set -o pipefail
+          ARGS=(test -json -count=1 -timeout "${{ github.event.inputs.go_timeout }}")
+          if [ -n "${{ github.event.inputs.run }}" ]; then
+            ARGS+=(-run "${{ github.event.inputs.run }}")
+          fi
+          ARGS+=(./tests/...)
+          # Never fail the step on test failures — we always want the results.
+          go "${ARGS[@]}" > "$GITHUB_WORKSPACE/complement.jsonl" 2> "$GITHUB_WORKSPACE/complement.stderr.log" || true
+          echo "done"
+
+      - name: Summarise results
+        if: always()
+        run: |
+          python3 - "$GITHUB_WORKSPACE/complement.jsonl" <<'PY' | tee "$GITHUB_WORKSPACE/complement-summary.txt" >> "$GITHUB_STEP_SUMMARY"
+          import json, sys
+          top = {}        # top-level test (no "/") -> last terminal action
+          fails = []
+          for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+              line = line.strip()
+              if not line or not line.startswith("{"):
+                  continue
+              try:
+                  o = json.loads(line)
+              except Exception:
+                  continue
+              t = o.get("Test", "")
+              a = o.get("Action", "")
+              if not t or "/" in t:
+                  continue
+              if a in ("pass", "fail", "skip"):
+                  top[t] = a
+          p = sum(1 for v in top.values() if v == "pass")
+          f = sum(1 for v in top.values() if v == "fail")
+          s = sum(1 for v in top.values() if v == "skip")
+          pct = round(100 * p / (p + f), 1) if (p + f) else 0.0
+          fails = sorted(t for t, v in top.items() if v == "fail")
+          print(f"# Complement: scandiaca\n")
+          print(f"**{p}/{p+f} passed  ({pct}%)**  —  {p} pass, {f} fail, {s} skip\n")
+          if fails:
+              print("## Failing (top-level)\n")
+              for t in fails:
+                  print(f"- `{t}`")
+          PY
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: complement-results
+          path: |
+            complement.jsonl
+            complement.stderr.log
+            complement-summary.txt
+          retention-days: 30
