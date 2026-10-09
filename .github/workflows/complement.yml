@@ -46,10 +46,19 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/complement"
           cd "$RUNNER_TEMP/complement"
+          REF="${{ github.event.inputs.complement_ref }}"
+          [ -n "$REF" ] || REF="main"
           git init -q
           git remote add origin https://github.com/matrix-org/complement.git
-          git fetch -q --depth 1 origin "${{ github.event.inputs.complement_ref }}"
-          git checkout -q FETCH_HEAD
+          # Shallow-fetch the ref directly (works for a branch/tag or a tip SHA);
+          # fall back to fetching main's history and checking out an ancestor SHA.
+          if git fetch -q --depth 1 origin "$REF"; then
+            git checkout -q FETCH_HEAD
+          else
+            git fetch -q origin main
+            git checkout -q "$REF"
+          fi
+          echo "Complement at: $(git rev-parse --short HEAD)"
 
       - name: Run Complement
         id: run
