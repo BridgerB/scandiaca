@@ -16,6 +16,10 @@ on:
         description: "go test -timeout value"
         required: false
         default: "90m"
+      parallel:
+        description: "Max concurrent tests (go test -parallel). Low = less memory; the runner OOMs if too high."
+        required: false
+        default: "2"
       complement_ref:
         description: "matrix-org/complement git ref to pin"
         required: false
@@ -38,6 +42,11 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: "stable"
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL || true
+          df -h / | tail -1
 
       - name: Build the scandiaca Complement image
         run: docker build -t complement-scandiaca -f Dockerfile.complement .
@@ -68,7 +77,10 @@ jobs:
           GOTOOLCHAIN: auto
         run: |
           set -o pipefail
-          ARGS=(test -json -count=1 -timeout "${{ github.event.inputs.go_timeout }}")
+          # -p 1 (one package at a time) + -parallel N caps concurrent homeserver
+          # deployments so the 16 GB runner doesn't OOM (the default parallelism
+          # spins up far too many containers at once).
+          ARGS=(test -json -count=1 -p 1 -parallel "${{ github.event.inputs.parallel }}" -timeout "${{ github.event.inputs.go_timeout }}")
           if [ -n "${{ github.event.inputs.run }}" ]; then
             ARGS+=(-run "${{ github.event.inputs.run }}")
           fi
