@@ -19,7 +19,7 @@ on:
       complement_ref:
         description: "matrix-org/complement git ref to pin"
         required: false
-        default: "61af675eb0e8c6b298dc5dff96e1893f07977d26"
+        default: "61af6754f4a4247094fdf7798bc0e7f290ee1968"
 
 # Let a new manual run supersede an in-flight one.
 concurrency:
