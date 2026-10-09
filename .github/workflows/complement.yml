@@ -48,6 +48,18 @@ jobs:
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL || true
           df -h / | tail -1
 
+      - name: Add swap
+        run: |
+          # Runs have been SIGTERM-killed (exit 143) ~70 min in regardless of
+          # test parallelism — the signature of the runner OOMing. Give it a big
+          # swapfile so memory pressure spills to disk instead of killing the VM.
+          sudo swapoff -a || true
+          sudo fallocate -l 13G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          free -m
+
       - name: Build the scandiaca Complement image
         run: docker build -t complement-scandiaca -f Dockerfile.complement .
 
@@ -77,16 +89,27 @@ jobs:
           GOTOOLCHAIN: auto
         run: |
           set -o pipefail
+          # Stream resource usage to the live console every 30s. Console logs are
+          # preserved even if the runner is killed, so this reveals memory/disk
+          # pressure that the (skipped-on-death) artifact upload would hide.
+          ( while true; do
+              echo "[rsrc $(date -u +%H:%M:%S)] $(free -m | awk '/Mem:/{printf "mem %s/%sMB",$3,$2} /Swap:/{printf " swap %s/%sMB",$3,$2}') $(df -m / | awk 'NR==2{printf " disk_free %sMB",$4}') containers=$(docker ps -q | wc -l | tr -d ' ')"
+              sleep 30
+            done ) &
+          MON=$!
           # -p 1 (one package at a time) + -parallel N caps concurrent homeserver
-          # deployments so the 16 GB runner doesn't OOM (the default parallelism
-          # spins up far too many containers at once).
+          # deployments. stderr is tee'd to the console so the last test and any
+          # panic are visible live; the jsonl stream is the machine-readable result.
           ARGS=(test -json -count=1 -p 1 -parallel "${{ github.event.inputs.parallel }}" -timeout "${{ github.event.inputs.go_timeout }}")
           if [ -n "${{ github.event.inputs.run }}" ]; then
             ARGS+=(-run "${{ github.event.inputs.run }}")
           fi
           ARGS+=(./tests/...)
           # Never fail the step on test failures — we always want the results.
-          go "${ARGS[@]}" > "$GITHUB_WORKSPACE/complement.jsonl" 2> "$GITHUB_WORKSPACE/complement.stderr.log" || true
+          go "${ARGS[@]}" \
+            > "$GITHUB_WORKSPACE/complement.jsonl" \
+            2> >(tee "$GITHUB_WORKSPACE/complement.stderr.log" >&2) || true
+          kill "$MON" 2>/dev/null || true
           echo "done"
 
       - name: Summarise results
