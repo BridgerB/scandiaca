@@ -97,18 +97,43 @@ jobs:
               sleep 30
             done ) &
           MON=$!
-          # -p 1 (one package at a time) + -parallel N caps concurrent homeserver
-          # deployments. stderr is tee'd to the console so the last test and any
-          # panic are visible live; the jsonl stream is the machine-readable result.
-          ARGS=(test -json -count=1 -p 1 -parallel "${{ github.event.inputs.parallel }}" -timeout "${{ github.event.inputs.go_timeout }}")
-          if [ -n "${{ github.event.inputs.run }}" ]; then
-            ARGS+=(-run "${{ github.event.inputs.run }}")
-          fi
-          ARGS+=(./tests/...)
-          # Never fail the step on test failures — we always want the results.
-          go "${ARGS[@]}" \
-            > "$GITHUB_WORKSPACE/complement.jsonl" \
-            2> >(tee "$GITHUB_WORKSPACE/complement.stderr.log" >&2) || true
+
+          : > "$GITHUB_WORKSPACE/complement.jsonl"
+          : > "$GITHUB_WORKSPACE/complement.stderr.log"
+
+          # A long-lived process (the go-test harness and/or dockerd) leaks memory
+          # across the full suite: RAM + swap climb to ~29 GB with only 2 containers
+          # ever live, so a single `go test ./tests/...` OOM-kills the runner ~70 min
+          # in. Run the suite in chunks, restarting go (and the docker daemon)
+          # between chunks so the accumulated memory is released each time.
+          LIST_PAT='.*'
+          [ -n "${{ github.event.inputs.run }}" ] && LIST_PAT="${{ github.event.inputs.run }}"
+          mapfile -t TESTS < <(go test ./tests/... -list "$LIST_PAT" 2>/dev/null | grep -E '^Test' | sort -u)
+          total=${#TESTS[@]}
+          echo "Discovered $total top-level tests"
+          CHUNKS=6
+          per=$(( (total + CHUNKS - 1) / CHUNKS ))
+          [ "$per" -lt 1 ] && per=1
+          i=0; chunk=0
+          while [ "$i" -lt "$total" ]; do
+            chunk=$((chunk + 1))
+            slice=( "${TESTS[@]:i:per}" )
+            i=$((i + per))
+            regex="^($(IFS='|'; echo "${slice[*]}"))$"
+            echo "::group::chunk $chunk (${#slice[@]} tests)"
+            # -p 1 + -parallel N caps concurrent homeserver deployments; stderr is
+            # tee'd live; jsonl is appended across chunks for one combined result.
+            go test -json -count=1 -p 1 -parallel "${{ github.event.inputs.parallel }}" \
+              -timeout "${{ github.event.inputs.go_timeout }}" -run "$regex" ./tests/... \
+              >> "$GITHUB_WORKSPACE/complement.jsonl" \
+              2> >(tee -a "$GITHUB_WORKSPACE/complement.stderr.log" >&2) || true
+            echo "::endgroup::"
+            # Release memory held by dockerd/go before the next chunk. prune WITHOUT
+            # -a so the tagged base image survives the restart.
+            docker system prune -f --volumes >/dev/null 2>&1 || true
+            sudo systemctl restart docker || true
+            for _ in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
+          done
           kill "$MON" 2>/dev/null || true
           echo "done"
 
